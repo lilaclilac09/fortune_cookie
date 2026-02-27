@@ -17,79 +17,90 @@ export default function GestureDetector({
   const [permissionDenied, setPermissionDenied] = useState(false);
   const previousDistanceRef = useRef<number | null>(null);
   const gestureTriggeredRef = useRef(false);
-  const handsRef = useRef<any>(null);
-  const cameraRef = useRef<any>(null);
+  const handDetectorRef = useRef<any>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
-  const onResults = useCallback(
-    (results: any) => {
-      if (!canvasRef.current || !videoRef.current) return;
+  const processFrame = useCallback(async () => {
+    if (!videoRef.current || !canvasRef.current || !handDetectorRef.current) {
+      return;
+    }
 
-      const ctx = canvasRef.current.getContext("2d");
-      if (!ctx) return;
+    const ctx = canvasRef.current.getContext("2d");
+    if (!ctx) return;
 
-      ctx.save();
-      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-      ctx.drawImage(
-        results.image,
-        0,
-        0,
-        canvasRef.current.width,
-        canvasRef.current.height
+    ctx.save();
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    ctx.drawImage(
+      videoRef.current,
+      0,
+      0,
+      canvasRef.current.width,
+      canvasRef.current.height
+    );
+
+    try {
+      const results = await handDetectorRef.current.detectForVideo(
+        videoRef.current,
+        performance.now()
       );
 
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length === 2) {
-        const leftHand = results.multiHandLandmarks[0];
-        const rightHand = results.multiHandLandmarks[1];
+      if (results.landmarks && results.landmarks.length === 2) {
+        const leftHand = results.landmarks[0];
+        const rightHand = results.landmarks[1];
 
-        const leftWrist = leftHand[0];
-        const rightWrist = rightHand[0];
+        if (leftHand[0] && rightHand[0]) {
+          const leftWrist = leftHand[0];
+          const rightWrist = rightHand[0];
 
-        const distance = Math.hypot(
-          leftWrist.x - rightWrist.x,
-          leftWrist.y - rightWrist.y
-        );
+          const distance = Math.hypot(
+            leftWrist.x - rightWrist.x,
+            leftWrist.y - rightWrist.y
+          );
 
-        if (previousDistanceRef.current !== null) {
-          if (
-            !gestureTriggeredRef.current &&
-            previousDistanceRef.current < 0.2 &&
-            distance > 0.4
-          ) {
-            gestureTriggeredRef.current = true;
-            onCrackGestureDetected();
-            setTimeout(() => {
-              gestureTriggeredRef.current = false;
-            }, 2000);
+          if (previousDistanceRef.current !== null) {
+            if (
+              !gestureTriggeredRef.current &&
+              previousDistanceRef.current < 0.2 &&
+              distance > 0.4
+            ) {
+              gestureTriggeredRef.current = true;
+              onCrackGestureDetected();
+              setTimeout(() => {
+                gestureTriggeredRef.current = false;
+              }, 2000);
+            }
           }
+
+          previousDistanceRef.current = distance;
+
+          ctx.fillStyle = "rgba(255, 127, 63, 0.5)";
+          ctx.beginPath();
+          ctx.arc(
+            leftWrist.x * canvasRef.current.width,
+            leftWrist.y * canvasRef.current.height,
+            10,
+            0,
+            2 * Math.PI
+          );
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(
+            rightWrist.x * canvasRef.current.width,
+            rightWrist.y * canvasRef.current.height,
+            10,
+            0,
+            2 * Math.PI
+          );
+          ctx.fill();
         }
-
-        previousDistanceRef.current = distance;
-
-        ctx.fillStyle = "rgba(255, 127, 63, 0.5)";
-        ctx.beginPath();
-        ctx.arc(
-          leftWrist.x * canvasRef.current.width,
-          leftWrist.y * canvasRef.current.height,
-          10,
-          0,
-          2 * Math.PI
-        );
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(
-          rightWrist.x * canvasRef.current.width,
-          rightWrist.y * canvasRef.current.height,
-          10,
-          0,
-          2 * Math.PI
-        );
-        ctx.fill();
       }
 
       ctx.restore();
-    },
-    [onCrackGestureDetected]
-  );
+      animationFrameRef.current = requestAnimationFrame(processFrame);
+    } catch (err) {
+      console.error("Hand detection error:", err);
+    }
+  }, [onCrackGestureDetected]);
 
   useEffect(() => {
     if (!enabled || isInitialized) return;
@@ -98,26 +109,29 @@ export default function GestureDetector({
 
     const initMediaPipe = async () => {
       try {
-        const { Hands } = await import("@mediapipe/hands");
-        const { Camera } = await import("@mediapipe/camera_utils");
+        const { HandLandmarker, FilesetResolver } = await import(
+          "@mediapipe/tasks-vision"
+        );
 
         if (!mounted) return;
 
-        const hands = new Hands({
-          locateFile: (file) =>
-            `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+        );
+
+        const handLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker.task"
+          },
+          runningMode: "VIDEO",
+          numHands: 2,
+          minHandDetectionConfidence: 0.5,
+          minHandPresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5
         });
 
-        hands.setOptions({
-          maxNumHands: 2,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-          selfieMode: true
-        });
-
-        hands.onResults(onResults);
-        handsRef.current = hands;
+        handDetectorRef.current = handLandmarker;
 
         if (videoRef.current && navigator.mediaDevices) {
           try {
@@ -126,21 +140,17 @@ export default function GestureDetector({
             });
             videoRef.current.srcObject = stream;
 
-            const camera = new Camera(videoRef.current, {
-              onFrame: async () => {
-                if (videoRef.current && handsRef.current) {
-                  await handsRef.current.send({ image: videoRef.current });
-                }
-              },
-              width: 640,
-              height: 480
-            });
-            cameraRef.current = camera;
-            camera.start();
-            setIsInitialized(true);
+            videoRef.current.onloadedmetadata = () => {
+              if (mounted) {
+                setIsInitialized(true);
+                animationFrameRef.current = requestAnimationFrame(processFrame);
+              }
+            };
           } catch (err) {
             console.error("Camera access denied:", err);
-            setPermissionDenied(true);
+            if (mounted) {
+              setPermissionDenied(true);
+            }
           }
         }
       } catch (err) {
@@ -152,18 +162,18 @@ export default function GestureDetector({
 
     return () => {
       mounted = false;
-      if (handsRef.current) {
-        handsRef.current.close();
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
       }
-      if (cameraRef.current) {
-        cameraRef.current.stop();
+      if (handDetectorRef.current) {
+        handDetectorRef.current.close();
       }
       if (videoRef.current?.srcObject) {
         const stream = videoRef.current.srcObject as MediaStream;
         stream.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [enabled, isInitialized, onResults]);
+  }, [enabled, isInitialized, processFrame]);
 
   if (!enabled) return null;
 
