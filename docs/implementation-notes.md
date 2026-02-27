@@ -21,6 +21,14 @@
 - Archetype mapping: 0=degen, 1=builder, 2=vc, 3=founder.
 - Rarity mapping: 0=common, 1=rare, 2=epic, 3=legendary.
 
+## Hand Gesture Integration
+- Added MediaPipe Hands for webcam-based gesture detection
+- Users can enable "Gesture Mode" to crack cookies by pulling hands apart
+- Component: app/src/components/GestureDetector.tsx
+- Gesture: Hold both hands close together, then pull apart to trigger crack
+- Fallback: Button-based cracking remains available
+- Privacy: All hand tracking runs in-browser, no data sent to servers
+
 ## Obstacles / Gaps
 - Front-end repo not available for direct integration or validation.
 - The previous on-chain program minted SPL tokens; it was replaced by the cookie/rarity flow, so any client code for minting is no longer valid.
@@ -32,6 +40,10 @@
 ## Files Touched
 - programs/fortune_cookie/src/lib.rs
 - app/src/fortunes.json
+- app/src/app/page.tsx
+- app/src/app/globals.css
+- app/src/components/GestureDetector.tsx (new)
+- app/package.json
 
 ## Deployment Status
 

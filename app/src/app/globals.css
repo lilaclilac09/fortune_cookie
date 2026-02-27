@@ -134,6 +134,21 @@ button.active {
   transform: translateY(-2px);
 }
 
+.gesture-hint {
+  text-align: center;
+  padding: 16px;
+  background: rgba(255, 127, 63, 0.1);
+  border-radius: 12px;
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 12px 0;
+}
+
+.gesture-hint strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .crack {
   background: var(--accent);
   color: #fff;

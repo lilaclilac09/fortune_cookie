@@ -6,6 +6,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { AnchorProvider, BN, Idl, Program } from "@coral-xyz/anchor";
 import fortunesData from "../fortunes.json";
+import GestureDetector from "../components/GestureDetector";
 
 const archetypes = ["degen", "builder", "vc", "founder"] as const;
 const rarities = ["common", "rare", "epic", "legendary"] as const;
@@ -107,6 +108,7 @@ export default function HomePage() {
 
   const [selected, setSelected] = useState<Archetype>("degen");
   const [randomMode, setRandomMode] = useState(false);
+  const [gestureMode, setGestureMode] = useState(false);
   const [fortune, setFortune] = useState<string | null>(null);
   const [rarity, setRarity] = useState<Rarity>("common");
   const [archetype, setArchetype] = useState<Archetype>("degen");
@@ -306,19 +308,36 @@ export default function HomePage() {
 
             <div className="buttons">
               <button
-                className="crack"
-                onClick={crackCookie}
+                className={gestureMode ? "active" : ""}
+                onClick={() => setGestureMode(!gestureMode)}
                 type="button"
-                disabled={isLoading}
               >
-                {isLoading ? "Cracking..." : "Crack the cookie"}
+                {gestureMode ? "👋 Gesture Mode ON" : "👋 Gesture Mode"}
               </button>
-              {statsReady === false && (
-                <button onClick={initializeStats} type="button">
-                  Initialize stats
-                </button>
-              )}
             </div>
+
+            {gestureMode ? (
+              <GestureDetector
+                enabled={gestureMode}
+                onCrackGestureDetected={crackCookie}
+              />
+            ) : (
+              <div className="buttons">
+                <button
+                  className="crack"
+                  onClick={crackCookie}
+                  type="button"
+                  disabled={isLoading}
+                >
+                  {isLoading ? "Cracking..." : "Crack the cookie"}
+                </button>
+                {statsReady === false && (
+                  <button onClick={initializeStats} type="button">
+                    Initialize stats
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="fortune-card">
