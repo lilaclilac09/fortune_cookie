@@ -320,6 +320,7 @@ export default function HomePage() {
               <GestureDetector
                 enabled={gestureMode}
                 onCrackGestureDetected={crackCookie}
+                onDisable={() => setGestureMode(false)}
               />
             ) : (
               <div className="buttons">
