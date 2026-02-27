@@ -32,3 +32,26 @@
 ## Files Touched
 - programs/fortune_cookie/src/lib.rs
 - app/src/fortunes.json
+
+## Deployment Status
+
+### Build
+Built successfully at target/deploy/fortune_cookie.so (213 KB).
+
+### Deployment to Devnet
+Connection to https://api.devnet.solana.com failed with TLS handshake EOF.
+
+**Options:**
+1. Try again later when network is stable
+2. Deploy locally with `solana-test-validator` + `anchor deploy`
+3. Use a different RPC (e.g., Helius, QuickNode) via `solana config set --url <RPC>`
+
+**Once network is accessible, deploy with:**
+```bash
+cd /Users/aileen/fortune_cookie
+solana airdrop 2  # if balance is low
+anchor deploy --provider.cluster devnet
+```
+
+**Program ID:** `GpPcUYfhJzGwpN1xwNMHRiEGmj2BnvAtPkZSn2Nyi8n8`  
+After deploy, update it in `programs/fortune_cookie/src/lib.rs` with the new deploy key if it changes.
