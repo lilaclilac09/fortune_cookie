@@ -281,7 +281,7 @@ export default function HomePage() {
           <WalletMultiButton />
         </section>
 
-        <section className="panel grid">
+        <section className="panel">
           <div className="grid">
             <div className="buttons">
               {archetypes.map((item) => (

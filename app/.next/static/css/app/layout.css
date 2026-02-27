@@ -583,9 +583,11 @@ body {
 }
 
 main {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   padding: 64px 20px 80px;
+  min-height: 100vh;
 }
 
 .shell {
@@ -629,6 +631,11 @@ main {
   border: 1px solid rgba(255, 127, 63, 0.15);
   position: relative;
   overflow: hidden;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-gap: 28px;
+  gap: 28px;
+  align-items: start;
 }
 
 .panel::after {
@@ -752,6 +759,7 @@ button.active {
 .footer {
   font-size: 0.85rem;
   color: var(--muted);
+  grid-column: 1 / -1;
 }
 
 @keyframes rise {
@@ -772,6 +780,7 @@ button.active {
 
   .panel {
     padding: 20px;
+    grid-template-columns: 1fr;
   }
 }
 
