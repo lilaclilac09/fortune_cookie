@@ -34,7 +34,7 @@ export function useFortuneCookie(): FortuneCookieHook {
           {
             publicKey,
             signTransaction,
-            signAllTransactions: async (txs) => {
+            signAllTransactions: async (txs: any) => {
               const signedTxs: any[] = [];
               for (const tx of txs) {
                 signedTxs.push(await signTransaction(tx));
