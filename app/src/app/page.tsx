@@ -33,6 +33,7 @@ const FORTUNES: string[] = [
 const GESTURE_THRESHOLD_START = 280; 
 const GESTURE_THRESHOLD_PULL = 550;
 const STORAGE_KEY = 'zen_fortune_stats';
+const CRACK_COST_SOL = 0.001;
 
 export default function HomePage() {
   const { publicKey, connected, disconnect } = useWallet();
@@ -53,6 +54,7 @@ export default function HomePage() {
   const [handDistance, setHandDistance] = useState(0);
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [txError, setTxError] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -71,27 +73,32 @@ export default function HomePage() {
     const points = Math.floor(Math.random() * 91) + 10;
     
     setCookieState('cracking');
+    setTxError(null);
+    setTxSignature(null);
+    setStatusMessage('💾 Recording on-chain...');
     
     setTimeout(async () => {
       setCookieState('broken');
       setCurrentFortune({ text: randomFortune, points });
       setStats(prev => ({ totalPoints: prev.totalPoints + points, tapCount: prev.tapCount + 1 }));
       
-      // Record on-chain if wallet connected
       if (connected && publicKey) {
         setIsRecording(true);
         try {
-          const archetype = Math.floor(Math.random() * 4); // 0-3
+          const archetype = Math.floor(Math.random() * 4);
           const signature = await recordFortune(archetype);
           setTxSignature(signature);
-        } catch (error) {
+          setStatusMessage('✓ Transaction confirmed!');
+        } catch (error: any) {
           console.error('Failed to record fortune on-chain:', error);
+          setTxError(error?.message || 'Transaction failed. Check wallet balance.');
+          setStatusMessage('✗ Transaction failed');
         } finally {
           setIsRecording(false);
         }
       }
     }, 400);
-  }, [cookieState]);
+  }, [cookieState, connected, publicKey, recordFortune]);
 
   const resetCookie = () => {
     setCookieState('resetting');
@@ -101,6 +108,8 @@ export default function HomePage() {
       setPullProgress(0);
       isReadyToPullRef.current = false;
       setIsLocked(false);
+      setTxSignature(null);
+      setTxError(null);
     }, 300);
   };
 
@@ -178,10 +187,9 @@ export default function HomePage() {
           if (isReadyToPullRef.current && timeSinceLastSeen < 500) {
             // Tolerate flicker
           } else {
-            setStatusMessage(handsFound === 1 ? "Show both hands (don't overlap)" : "Place both hands in front of camera 🖐️");
-            setPullProgress(0);
-            isReadyToPullRef.current = false;
+            setStatusMessage("Show both hands!");
             setIsLocked(false);
+            isReadyToPullRef.current = false;
           }
         }
       }
@@ -189,66 +197,51 @@ export default function HomePage() {
     });
 
     const camera = new (window as any).Camera(videoRef.current, {
-      onFrame: async () => {
-        await hands.send({ image: videoRef.current! });
-      },
-      width: 640,
-      height: 480
+      onFrame: async () => await hands.send({ image: videoRef.current }),
+      width: 1280,
+      height: 720
     });
 
     camera.start();
-    return () => { 
-      try {
-        camera.stop();
-      } catch (e) {
-        console.log('Camera stop error:', e);
-      }
+    setStatusMessage("Ready! Show both hands...");
+
+    return () => {
+      camera.stop();
+      hands.close();
     };
-  }, [breakCookie, cookieState, connected]);
+  }, [connected, cookieState, breakCookie]);
 
   if (!connected) {
     return (
-      <div style={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        alignItems: 'center', 
-        justifyContent: 'center', 
-        minHeight: '100vh',
-        padding: '16px',
-        background: 'linear-gradient(to bottom right, #fef3c7, #fed7aa)'
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '120px', marginBottom: '32px', lineHeight: '1' }}>🥠</div>
-          <h1 style={{ fontSize: '48px', fontWeight: 900, color: '#78350f', marginBottom: '16px' }}>ZEN FORTUNE COOKIE</h1>
-          <p style={{ fontSize: '24px', color: '#b45309', marginBottom: '48px' }}>Connect your wallet to start</p>
-          <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <WalletMultiButton />
+      <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@700;900&display=swap');
+          body { font-family: 'Poppins', sans-serif; margin: 0; overflow: hidden; }
+          script { display: none; }
+        `}</style>
+        <div style={{ textAlign: 'center', color: 'white' }}>
+          <div style={{ fontSize: '120px', marginBottom: '20px' }}>🥠</div>
+          <h1 style={{ fontSize: '56px', fontWeight: 900, margin: '0 0 20px 0', letterSpacing: '-2px' }}>Zen Fortune Cookie</h1>
+          <p style={{ fontSize: '18px', marginBottom: '40px', opacity: 0.9 }}>Connect your wallet to start breaking cookies</p>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
+            <WalletMultiButton style={{ background: '#f59e0b', color: '#000', fontWeight: 'bold', fontSize: '16px', padding: '12px 24px' }} />
           </div>
-          <p style={{ fontSize: '14px', color: '#92400e', marginTop: '32px', opacity: 0.7 }}>💡 Tip: Use "Mock Wallet" to test locally</p>
+          <p style={{ fontSize: '14px', opacity: 0.8, marginTop: '30px' }}>💡 Tip: Each fortune costs 0.001 SOL</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      minHeight: '100vh',
-      padding: '16px',
-      color: '#92400e',
-      fontFamily: 'system-ui, -apple-system, sans-serif',
-      position: 'relative',
-      background: 'linear-gradient(to bottom right, #fef3c7, #fed7aa)',
-      overflow: 'hidden'
-    }}>
-      <style jsx>{`
+    <main style={{ width: '100vw', height: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@700;900&display=swap');
+        body { font-family: 'Poppins', sans-serif; margin: 0; overflow: hidden; }
+        
         @keyframes shake {
-          0%, 100% { transform: translateX(0); }
-          25% { transform: translateX(-8px) rotate(-2deg); }
-          75% { transform: translateX(8px) rotate(2deg); }
+          0% { transform: rotate(0deg); }
+          25% { transform: rotate(-3deg); }
+          75% { transform: rotate(3deg); }
         }
         .animate-shake {
           animation: shake 0.15s ease-in-out infinite;
@@ -291,296 +284,101 @@ export default function HomePage() {
         }
       `}</style>
 
-      {/* Wallet Info & Disconnect */}
+      {/* Camera Feed */}
+      <video ref={videoRef} style={{ position: 'absolute', left: '-9999px' }} />
+      <canvas ref={canvasRef} width={1280} height={720} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 10 }} />
+
+      {/* Wallet Info */}
       <div style={{ position: 'absolute', top: '32px', right: '32px', zIndex: 50, display: 'flex', gap: '12px', alignItems: 'center' }}>
         {publicKey && (
-          <div style={{
-            background: 'rgba(255,255,255,0.9)',
-            padding: '8px 16px',
-            borderRadius: '8px',
-            fontSize: '12px',
-            fontWeight: 700,
-            color: '#92400e',
-            maxWidth: '200px',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap'
-          }}>
-            {publicKey.toString().slice(0, 4)}...{publicKey.toString().slice(-4)}
+          <div style={{ background: 'rgba(255,255,255,0.9)', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, color: '#92400e' }}>
+            💰 {publicKey.toString().slice(0, 4)}...{publicKey.toString().slice(-4)}
           </div>
         )}
-        {connected && (
-          <button
-            onClick={() => disconnect()}
-            style={{
-              background: '#ef4444',
-              color: 'white',
-              padding: '8px 16px',
-              borderRadius: '8px',
-              border: 'none',
-              fontWeight: 700,
-              fontSize: '12px',
-              cursor: 'pointer',
-              transition: 'all 0.2s'
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.background = '#dc2626'}
-            onMouseLeave={(e) => e.currentTarget.style.background = '#ef4444'}
-          >
-            Disconnect
-          </button>
-        )}
+        <button onClick={() => disconnect()} style={{ background: '#ef4444', color: 'white', padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: 700, fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.background = '#dc2626'} onMouseLeave={(e) => e.currentTarget.style.background = '#ef4444'}>
+          Disconnect
+        </button>
       </div>
 
       {/* Stats Board */}
-      <div style={{
-        position: 'absolute',
-        top: '32px',
-        left: '32px',
-        background: 'rgba(255,255,255,0.4)',
-        backdropFilter: 'blur(12px)',
-        padding: '20px',
-        borderRadius: '16px',
-        border: '1px solid rgba(255,255,255,0.5)',
-        boxShadow: '0 20px 25px rgba(0,0,0,0.1)',
-        transition: 'transform 0.2s',
-        cursor: 'pointer'
-      }}
-      onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
-      onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-      >
-        <div style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.6, fontWeight: 900, marginBottom: '4px' }}>Total Points</div>
-        <div style={{ fontSize: '36px', fontWeight: 900, color: '#ea580c', textShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>{stats.totalPoints.toLocaleString()}</div>
-        <div style={{ fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.6, fontWeight: 900, marginTop: '8px' }}>Cookies Cracked</div>
-        <div style={{ fontSize: '24px', fontWeight: 900, color: '#f97316' }}>{stats.tapCount}</div>
+      <div style={{ position: 'absolute', top: '32px', left: '32px', background: 'rgba(255,255,255,0.4)', backdropFilter: 'blur(12px)', padding: '20px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.5)', boxShadow: '0 20px 25px rgba(0,0,0,0.1)' }}>
+        <div style={{ color: 'white', fontWeight: 900, textAlign: 'center', fontSize: '14px' }}>
+          <div>🎯 {stats.tapCount} Opened</div>
+          <div style={{ fontSize: '20px', fontWeight: 900, marginTop: '8px' }}>{stats.totalPoints} PTS</div>
+        </div>
       </div>
-      
-      {/* Main Cookie Stage */}
-      <div style={{
-        position: 'relative',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}>
-        {/* Instruction overlay */}
-        {cookieState === 'intact' && !isLocked && (
-          <div style={{
-            position: 'absolute',
-            top: '-192px',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            opacity: 0.9,
-            pointerEvents: 'none',
-            transition: 'all 0.3s',
-            animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite'
-          }}>
-             <div style={{ display: 'flex', gap: '64px', fontSize: '48px' }}>
-                <span>👊</span>
-                <span style={{ fontSize: '18px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '-1px', lineHeight: 1.2 }}>Bring<br/>Together</span>
-                <span>👊</span>
-             </div>
-             <p className="mt-6 font-black bg-white/90 text-orange-900 px-6 py-3 rounded-2xl shadow-2xl border-2 border-orange-200 uppercase text-sm tracking-widest">
-               Tip: Keep hands separate but close (~15cm)
-             </p>
-          </div>
-        )}
 
+      {/* Main Content */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 20, position: 'relative' }}>
         {/* Cookie Visualization */}
-        <div style={{
-          position: 'relative',
-          transition: 'all 0.3s'
-        }} className={cookieState === 'cracking' ? 'animate-shake' : ''}>
+        <div style={{ position: 'relative', transition: 'all 0.3s' }} className={cookieState === 'cracking' ? 'animate-shake' : ''}>
           {cookieState !== 'broken' ? (
-            <div 
-              style={{ 
-                fontSize: `${280 + pullProgress * 100}px`,
-                transform: `scale(${1 + pullProgress * 0.4})`,
-                filter: isLocked ? `drop-shadow(0 0 30px rgba(251, 146, 60, 0.4))` : `drop-shadow(0 20px 50px rgba(0,0,0,0.1))`,
-                transition: 'all 0.1s',
-                userSelect: 'none',
-                lineHeight: '1'
-              }}
-            >
+            <div style={{ fontSize: `${280 + pullProgress * 100}px`, transform: `scale(${1 + pullProgress * 0.4})`, filter: isLocked ? `drop-shadow(0 0 30px rgba(251, 146, 60, 0.4))` : `drop-shadow(0 20px 50px rgba(0,0,0,0.1))`, transition: 'all 0.1s', userSelect: 'none', lineHeight: '1' }}>
               🥠
             </div>
           ) : (
-            <div style={{
-              position: 'relative',
-              width: '400px',
-              height: '400px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}>
-              {/* Particles/Crumbs Burst */}
+            <div style={{ position: 'relative', width: '400px', height: '400px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {[...Array(8)].map((_, i) => (
-                <div 
-                  key={i} 
-                  className="particle" 
-                  style={{ 
-                    ['--tw-translate-x' as any]: `${(Math.random() - 0.5) * 300}px`,
-                    ['--tw-translate-y' as any]: `${(Math.random() - 0.5) * 300}px`,
-                    left: '50%',
-                    top: '50%'
-                  }}
-                />
+                <div key={i} className="particle" style={{ ['--tw-translate-x' as any]: `${(Math.random() - 0.5) * 300}px`, ['--tw-translate-y' as any]: `${(Math.random() - 0.5) * 300}px`, left: '50%', top: '50%' }} />
               ))}
 
-              {/* Physical Paper Slip */}
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 animate-paper z-10">
-                <div className="paper-texture w-[320px] p-6 border-t-4 border-orange-300 rounded-sm transform shadow-xl rotate-1">
-                  <p className="text-gray-400 text-[10px] uppercase font-bold tracking-widest mb-1 text-left">Your Fortune</p>
-                  <p className="text-xl font-bold italic text-gray-800 leading-tight">"{currentFortune?.text}"</p>
-                  <div className="mt-4 flex justify-between items-center">
-                    <span className="text-orange-500 font-black text-lg">+{currentFortune?.points} PTS</span>
-                    <button 
-                      onClick={resetCookie}
-                      disabled={isRecording}
-                      className="bg-orange-600 text-white px-5 py-2 rounded-lg font-black text-sm uppercase tracking-wider hover:bg-orange-700 active:scale-95 transition-all shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {isRecording ? 'Recording...' : 'Next Cookie'}
-                    </button>
+              {/* Fortune Slip */}
+              <div className="animate-paper" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', zIndex: 10 }}>
+                <div className="paper-texture" style={{ width: '420px', padding: '32px', borderTop: '4px solid #fed7aa', borderRadius: '4px', boxShadow: '0 20px 25px rgba(0,0,0,0.2)', transform: 'rotate(2deg)' }}>
+                  <p style={{ color: '#9ca3af', fontSize: '10px', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', margin: '0 0 12px 0', textAlign: 'left' }}>Your Fortune</p>
+                  <p style={{ fontSize: '18px', fontWeight: 700, fontStyle: 'italic', color: '#1f2937', lineHeight: '1.5', marginBottom: '20px' }}>&quot;{currentFortune?.text}&quot;</p>
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid #fed7aa' }}>
+                    <span style={{ color: '#b45309', fontWeight: 900, fontSize: '18px' }}>+{currentFortune?.points} PTS</span>
+                    <span style={{ color: '#92400e', fontWeight: 700, fontSize: '14px' }}>⚡ {CRACK_COST_SOL} SOL</span>
                   </div>
                   
-                  {/* On-chain confirmation */}
-                  {txSignature && (
-                    <div className="mt-3 pt-3 border-t border-orange-200 text-xs text-green-600">
-                      <p className="font-bold mb-1">✓ Recorded on-chain</p>
-                      <a 
-                        href={`https://explorer.solana.com/tx/${txSignature}?cluster=custom&customUrl=http://localhost:8899`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-cyan-600 underline text-[10px]"
-                      >
-                        View Transaction
-                      </a>
-                    </div>
-                  )}
+                  {/* TX Status - PROMINENT */}
+                  <div style={{ marginBottom: '24px', minHeight: '120px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                    {isRecording && (
+                      <div style={{ textAlign: 'center', fontSize: '14px', fontWeight: 700, color: '#2563eb', animation: 'pulse 2s infinite' }}>
+                        ⏳ Recording transaction...
+                      </div>
+                    )}
+                    {txSignature && (
+                      <div style={{ textAlign: 'center', background: '#dcfce7', border: '2px solid #22c55e', borderRadius: '8px', padding: '16px' }}>
+                        <p style={{ color: '#15803d', fontWeight: 900, fontSize: '12px', margin: '0 0 8px 0', textTransform: 'uppercase' }}>✓ SUCCESS</p>
+                        <p style={{ color: '#1f2937', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all', margin: 0, background: '#dcfce7', padding: '8px', borderRadius: '4px' }}>
+                          TX: {txSignature}
+                        </p>
+                      </div>
+                    )}
+                    {txError && (
+                      <div style={{ textAlign: 'center', background: '#fee2e2', border: '2px solid #ef4444', borderRadius: '8px', padding: '12px' }}>
+                        <p style={{ color: '#7f1d1d', fontWeight: 900, fontSize: '11px', margin: '0 0 4px 0' }}>✗ FAILED</p>
+                        <p style={{ color: '#991b1b', fontSize: '10px', margin: 0 }}>{txError}</p>
+                      </div>
+                    )}
+                    {!isRecording && !txSignature && !txError && (
+                      <div style={{ textAlign: 'center', color: '#6b7280', fontSize: '12px' }}>
+                        💾 Recording to blockchain...
+                      </div>
+                    )}
+                  </div>
+                  
+                  <button onClick={resetCookie} disabled={isRecording} style={{ width: '100%', background: '#ea580c', color: 'white', padding: '14px', borderRadius: '8px', fontWeight: 900, fontSize: '14px', textTransform: 'uppercase', letterSpacing: '1px', border: 'none', cursor: isRecording ? 'not-allowed' : 'pointer', opacity: isRecording ? 0.6 : 1, transition: 'all 0.2s' }} onMouseEnter={(e) => !isRecording && (e.currentTarget.style.background = '#c2410c')} onMouseLeave={(e) => (e.currentTarget.style.background = '#ea580c')}>
+                    {isRecording ? '⏳ Recording...' : '🥠 Next Cookie'}
+                  </button>
                 </div>
               </div>
 
               {/* Broken Halves */}
-              <div style={{ fontSize: '280px', clipPath: 'inset(0 50% 0 0)', position: 'absolute', left: '50%', top: '50%', transform: 'translate(-110%, -50%) rotate(-25deg)', opacity: 0.9, transition: 'all 0.7s', userSelect: 'none' }}>🥠</div>
-              <div style={{ fontSize: '280px', clipPath: 'inset(0 0 0 50%)', position: 'absolute', left: '50%', top: '50%', transform: 'translate(-10%, -50%) rotate(25deg)', opacity: 0.9, transition: 'all 0.7s', userSelect: 'none' }}>🥠</div>
+              <div style={{ fontSize: '280px', clipPath: 'inset(0 50% 0 0)', position: 'absolute', left: '50%', top: '50%', transform: 'translate(-110%, -50%) rotate(-25deg)', opacity: 0.9, userSelect: 'none' }}>🥠</div>
+              <div style={{ fontSize: '280px', clipPath: 'inset(0 0 0 50%)', position: 'absolute', left: '50%', top: '50%', transform: 'translate(-10%, -50%) rotate(25deg)', opacity: 0.9, userSelect: 'none' }}>🥠</div>
             </div>
           )}
         </div>
 
-        {/* Dynamic Status Display */}
-        <div style={{
-          marginTop: '80px',
-          padding: '24px 48px',
-          borderRadius: '24px',
-          border: `4px solid ${isLocked ? '#ea580c' : '#fed7aa'}`,
-          transition: 'all 0.3s',
-          boxShadow: '0 20px 25px rgba(0,0,0,0.1)',
-          minWidth: '380px',
-          textAlign: 'center',
-          background: isLocked ? '#ea580c' : 'rgba(255,255,255,0.9)',
-          color: isLocked ? 'white' : '#92400e',
-          animation: isLocked ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none'
-        }}>
-          <p style={{
-            fontSize: '32px',
-            fontWeight: 900,
-            textTransform: 'uppercase',
-            letterSpacing: '-1px'
-          }}>{statusMessage}</p>
-          {!isLocked && cookieState === 'intact' && (
-             <p style={{
-               fontSize: '12px',
-               opacity: 0.5,
-               marginTop: '12px',
-               fontWeight: 700,
-               textTransform: 'uppercase',
-               letterSpacing: '1px'
-             }}>Tip: Keep hands parallel and steady</p>
-          )}
+        {/* Status Message */}
+        <div style={{ marginTop: '80px', padding: '24px 48px', borderRadius: '24px', border: `4px solid ${isLocked ? '#ea580c' : '#fed7aa'}`, transition: 'all 0.3s', boxShadow: '0 20px 25px rgba(0,0,0,0.1)', minWidth: '380px', textAlign: 'center', background: isLocked ? '#ea580c' : 'rgba(255,255,255,0.9)', color: isLocked ? 'white' : '#1f2937', fontWeight: 700, fontSize: '16px' }}>
+          {statusMessage}
         </div>
       </div>
-
-      {/* Enhanced Camera Viewfinder */}
-      <div style={{
-        position: 'fixed',
-        bottom: '32px',
-        right: '32px',
-        width: '288px',
-        height: '208px',
-        borderRadius: '24px',
-        overflow: 'hidden',
-        border: '4px solid white',
-        boxShadow: '0 0 50px rgba(0,0,0,0.15)',
-        background: 'black',
-        transition: 'transform 0.2s',
-        cursor: 'pointer'
-      }}
-      onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
-      onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-      >
-        <video ref={videoRef} style={{ display: 'none' }} autoPlay muted playsInline />
-        <canvas ref={canvasRef} width="640" height="480" style={{
-          width: '100%',
-          height: '100%',
-          objectFit: 'cover',
-          transform: 'scaleX(-1)'
-        }} />
-        {isLocked && <div style={{
-          position: 'absolute',
-          inset: 0,
-          background: 'rgba(249, 115, 22, 0.2)',
-          border: '12px solid #f97316',
-          boxSizing: 'border-box',
-          animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-          pointerEvents: 'none'
-        }} />}
-        <div style={{
-          position: 'absolute',
-          bottom: '12px',
-          left: '12px',
-          background: 'rgba(0,0,0,0.5)',
-          backdropFilter: 'blur(12px)',
-          padding: '4px 12px',
-          borderRadius: '9999px',
-          fontSize: '10px',
-          color: 'white',
-          fontWeight: 700,
-          letterSpacing: '1px',
-          textTransform: 'uppercase'
-        }}>
-          {numHandsDetected} HANDS DETECTED
-        </div>
-      </div>
-
-      {/* Tension Progress Bar */}
-      {cookieState === 'intact' && pullProgress > 0 && (
-        <div style={{
-          position: 'fixed',
-          bottom: '96px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: '384px',
-          height: '40px',
-          background: 'rgba(0,0,0,0.1)',
-          borderRadius: '9999px',
-          overflow: 'hidden',
-          border: '2px solid rgba(255,255,255,0.5)',
-          padding: '6px',
-          boxShadow: '0 20px 25px rgba(0,0,0,0.1)',
-          backdropFilter: 'blur(4px)'
-        }}>
-          <div 
-            style={{
-              height: '100%',
-              background: 'linear-gradient(to right, #fbbf24, #f97316, #dc2626)',
-              transition: 'width 0.075s linear',
-              borderRadius: '9999px',
-              boxShadow: '0 0 20px rgba(249,115,22,0.4)',
-              width: `${pullProgress * 100}%`
-            }}
-          />
-        </div>
-      )}
-    </div>
+    </main>
   );
 }
