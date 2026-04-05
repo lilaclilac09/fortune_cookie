@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { useFortuneCookie } from '@/hooks/useFortuneCookie';
+import { useFortuneCookie } from '@/hooks/useFortuneCookieRealBlockchain';
 
 interface Stats {
   totalPoints: number;
