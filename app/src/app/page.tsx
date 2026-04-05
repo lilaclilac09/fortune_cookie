@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useFortuneCookie } from '@/hooks/useFortuneCookie';
 
 interface Stats {
   totalPoints: number;
@@ -35,6 +36,7 @@ const STORAGE_KEY = 'zen_fortune_stats';
 
 export default function HomePage() {
   const { publicKey, connected, disconnect } = useWallet();
+  const { recordFortune } = useFortuneCookie();
   
   const [stats, setStats] = useState<Stats>(() => {
     if (typeof window === 'undefined') return { totalPoints: 0, tapCount: 0 };
@@ -49,6 +51,8 @@ export default function HomePage() {
   const [statusMessage, setStatusMessage] = useState("Initializing Camera...");
   const [isLocked, setIsLocked] = useState(false);
   const [handDistance, setHandDistance] = useState(0);
+  const [txSignature, setTxSignature] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -61,17 +65,31 @@ export default function HomePage() {
     }
   }, [stats]);
 
-  const breakCookie = useCallback(() => {
+  const breakCookie = useCallback(async () => {
     if (cookieState !== 'intact') return;
     const randomFortune = FORTUNES[Math.floor(Math.random() * FORTUNES.length)];
     const points = Math.floor(Math.random() * 91) + 10;
     
     setCookieState('cracking');
     
-    setTimeout(() => {
+    setTimeout(async () => {
       setCookieState('broken');
       setCurrentFortune({ text: randomFortune, points });
       setStats(prev => ({ totalPoints: prev.totalPoints + points, tapCount: prev.tapCount + 1 }));
+      
+      // Record on-chain if wallet connected
+      if (connected && publicKey) {
+        setIsRecording(true);
+        try {
+          const archetype = Math.floor(Math.random() * 4); // 0-3
+          const signature = await recordFortune(archetype);
+          setTxSignature(signature);
+        } catch (error) {
+          console.error('Failed to record fortune on-chain:', error);
+        } finally {
+          setIsRecording(false);
+        }
+      }
     }, 400);
   }, [cookieState]);
 
@@ -417,12 +435,28 @@ export default function HomePage() {
                   <div className="mt-4 flex justify-between items-center">
                     <span className="text-orange-500 font-black text-lg">+{currentFortune?.points} PTS</span>
                     <button 
-                      onClick={resetCookie} 
-                      className="bg-orange-600 text-white px-5 py-2 rounded-lg font-black text-sm uppercase tracking-wider hover:bg-orange-700 active:scale-95 transition-all shadow-lg"
+                      onClick={resetCookie}
+                      disabled={isRecording}
+                      className="bg-orange-600 text-white px-5 py-2 rounded-lg font-black text-sm uppercase tracking-wider hover:bg-orange-700 active:scale-95 transition-all shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Next Cookie
+                      {isRecording ? 'Recording...' : 'Next Cookie'}
                     </button>
                   </div>
+                  
+                  {/* On-chain confirmation */}
+                  {txSignature && (
+                    <div className="mt-3 pt-3 border-t border-orange-200 text-xs text-green-600">
+                      <p className="font-bold mb-1">✓ Recorded on-chain</p>
+                      <a 
+                        href={`https://explorer.solana.com/tx/${txSignature}?cluster=custom&customUrl=http://localhost:8899`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-cyan-600 underline text-[10px]"
+                      >
+                        View Transaction
+                      </a>
+                    </div>
+                  )}
                 </div>
               </div>
 
