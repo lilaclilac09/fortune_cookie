@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useFortuneCookie } from '@/hooks/useFortuneCookieRealBlockchain';
+import WalletButton from '@/components/WalletButton';
 
 interface Stats {
   totalPoints: number;
@@ -30,8 +30,8 @@ const FORTUNES: string[] = [
   "Good news is on its way to you. 📩"
 ];
 
-const GESTURE_THRESHOLD_START = 280; 
-const GESTURE_THRESHOLD_PULL = 550;
+const GESTURE_THRESHOLD_START = 180;  // 降低:更容易锁定
+const GESTURE_THRESHOLD_PULL = 450;  // 降低:更容易拉动
 const STORAGE_KEY = 'zen_fortune_stats';
 const CRACK_COST_SOL = 0.001;
 
@@ -55,6 +55,8 @@ export default function HomePage() {
   const [txSignature, setTxSignature] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
+  const [inviteCode, setInviteCode] = useState<string>('');
+  const [inviteBonus, setInviteBonus] = useState<number>(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -128,8 +130,8 @@ export default function HomePage() {
     hands.setOptions({
       maxNumHands: 2,
       modelComplexity: 1,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
+      minDetectionConfidence: 0.3,  // 降低:更容易检测手
+      minTrackingConfidence: 0.3    // 降低:更容易追踪
     });
 
     const canvasCtx = canvasRef.current.getContext('2d')!;
@@ -242,7 +244,7 @@ export default function HomePage() {
           <h1 style={{ fontSize: '56px', fontWeight: 900, margin: '0 0 20px 0', letterSpacing: '-2px' }}>Zen Fortune Cookie</h1>
           <p style={{ fontSize: '18px', marginBottom: '40px', opacity: 0.9 }}>Connect your wallet to start breaking cookies</p>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
-            <WalletMultiButton className="wallet-button" />
+            <WalletButton />
           </div>
           <p style={{ fontSize: '14px', opacity: 0.8, marginTop: '30px' }}>💡 Tip: Each fortune costs 0.001 SOL</p>
         </div>
