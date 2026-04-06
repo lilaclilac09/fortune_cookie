@@ -213,7 +213,7 @@ export default function HomePage() {
 
   if (!connected) {
     return (
-      <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+      <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #ea580c 100%)' }}>
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@700;900&display=swap');
           body { font-family: 'Poppins', sans-serif; margin: 0; overflow: hidden; }
@@ -233,7 +233,7 @@ export default function HomePage() {
   }
 
   return (
-    <main style={{ width: '100vw', height: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+    <main style={{ width: '100vw', height: '100vh', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #ea580c 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@700;900&display=swap');
         body { font-family: 'Poppins', sans-serif; margin: 0; overflow: hidden; }

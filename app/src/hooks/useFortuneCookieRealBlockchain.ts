@@ -51,12 +51,12 @@ export function useFortuneCookie(): FortuneCookieHook {
         const counterSeed = Math.floor(Date.now() / 1000);
 
         // Derive PDAs
-        const [statsAccount] = PublicKey.findProgramAddressSync(
+        const [statsAccount, statsBump] = PublicKey.findProgramAddressSync(
           [Buffer.from('stats')],
           PROGRAM_ID
         );
 
-        const [cookieAccount] = PublicKey.findProgramAddressSync(
+        const [cookieAccount, cookieBump] = PublicKey.findProgramAddressSync(
           [
             publicKey.toBuffer(),
             Buffer.from('cookie'),
@@ -65,7 +65,26 @@ export function useFortuneCookie(): FortuneCookieHook {
           PROGRAM_ID
         );
 
-        // Call program
+        // Check if stats account exists, initialize if needed
+        const statsAccountInfo = await connection.getAccountInfo(statsAccount);
+        if (!statsAccountInfo) {
+          console.log('📝 Initializing stats account...');
+          try {
+            const initTx = await program.methods
+              .initializeStats()
+              .accounts({
+                payer: publicKey,
+                stats: statsAccount,
+                systemProgram: SystemProgram.programId,
+              })
+              .rpc({ skipPreflight: false });
+            console.log('✅ Stats initialized:', initTx);
+          } catch (initError) {
+            console.log('Stats might already exist, continuing...');
+          }
+        }
+
+        // Call program - explicitly pass all required accounts
         const tx = await program.methods
           .openCookie(archetype, new anchor.BN(counterSeed))
           .accounts({
@@ -74,7 +93,7 @@ export function useFortuneCookie(): FortuneCookieHook {
             stats: statsAccount,
             systemProgram: SystemProgram.programId,
           })
-          .rpc({ skipPreflight: false });
+          .rpc({ skipPreflight: false, commitment: 'confirmed' });
 
         console.log('✅ Fortune recorded on-chain:', {
           tx,
