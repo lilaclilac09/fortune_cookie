@@ -1,9 +1,13 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useFortuneCookie } from '@/hooks/useFortuneCookieRealBlockchain';
-import WalletButton from '@/components/WalletButton';
+import { useWalletMode } from '@/components/WalletModeSelector';
+
+// 禁用SSR渲染 - 只在客户端渲染
+const WalletButton = dynamic(() => import('@/components/WalletButton'), { ssr: false });
 
 interface Stats {
   totalPoints: number;
@@ -37,7 +41,10 @@ const CRACK_COST_SOL = 0.001;
 
 export default function HomePage() {
   const { publicKey, connected, disconnect } = useWallet();
+  const { mode, setMode, localWallet } = useWalletMode();
   const { recordFortune } = useFortuneCookie();
+  const [isDemoMode, setIsDemoMode] = useState(mode === 'demo');
+  const [isLocalMode, setIsLocalMode] = useState(mode === 'local');
   
   const [stats, setStats] = useState<Stats>(() => {
     if (typeof window === 'undefined') return { totalPoints: 0, tapCount: 0 };
@@ -69,38 +76,80 @@ export default function HomePage() {
     }
   }, [stats]);
 
-  const breakCookie = useCallback(async () => {
+  const breakCookie = useCallback(() => {
     if (cookieState !== 'intact') return;
+    
     const randomFortune = FORTUNES[Math.floor(Math.random() * FORTUNES.length)];
     const points = Math.floor(Math.random() * 91) + 10;
+    const archetype = Math.floor(Math.random() * 4);
     
     setCookieState('cracking');
     setTxError(null);
     setTxSignature(null);
-    setStatusMessage('💾 Recording on-chain...');
     
-    setTimeout(async () => {
+    // 显示拆开的 cookie 动画
+    setTimeout(() => {
       setCookieState('broken');
       setCurrentFortune({ text: randomFortune, points });
       setStats(prev => ({ totalPoints: prev.totalPoints + points, tapCount: prev.tapCount + 1 }));
-      
-      if (connected && publicKey) {
-        setIsRecording(true);
-        try {
-          const archetype = Math.floor(Math.random() * 4);
-          const signature = await recordFortune(archetype);
-          setTxSignature(signature);
-          setStatusMessage('✓ Transaction confirmed!');
-        } catch (error: any) {
-          console.error('Failed to record fortune on-chain:', error);
-          setTxError(error?.message || 'Transaction failed. Check wallet balance.');
-          setStatusMessage('✗ Transaction failed');
-        } finally {
-          setIsRecording(false);
-        }
-      }
     }, 400);
-  }, [cookieState, connected, publicKey, recordFortune]);
+    
+    // 3秒后自动复原到 intact 状态（不用点按钮）
+    setTimeout(() => {
+      setCookieState('resetting');
+      setTimeout(() => {
+        setCookieState('intact');
+        setCurrentFortune(null);
+        setPullProgress(0);
+        isReadyToPullRef.current = false;
+        setIsLocked(false);
+      }, 300);
+    }, 3000); // 3秒后自动关闭
+    
+    // 异步上链 - 不阻塞 UI - fire-and-forget 模式
+    if (isDemoMode) {
+      // Demo 模式 - 显示模拟的链上交易结果
+      setIsRecording(true);
+      setTimeout(() => {
+        setTxSignature('demo_tx_' + Math.random().toString(36).slice(2, 10));
+        setIsRecording(false);
+      }, 1000);
+    } else if (isLocalMode && localWallet) {
+      // 本地钱包模式 - 真实的区块链交易
+      setIsRecording(true);
+      setStatusMessage('💾 Recording on-chain (Local)...');
+      
+      recordFortune(archetype)
+        .then((signature) => {
+          setTxSignature(signature);
+          console.log('✅ Fortune recorded on local wallet:', signature);
+        })
+        .catch((error: any) => {
+          console.error('❌ Failed to record:', error);
+          setTxError(error?.message || 'Transaction failed');
+        })
+        .finally(() => {
+          setIsRecording(false);
+        });
+    } else if (connected && publicKey) {
+      // Solflare 或其他真实钱包模式
+      setIsRecording(true);
+      setStatusMessage('💾 Recording on-chain...');
+      
+      recordFortune(archetype)
+        .then((signature) => {
+          setTxSignature(signature);
+          console.log('✅ Fortune recorded:', signature);
+        })
+        .catch((error: any) => {
+          console.error('❌ Failed to record:', error);
+          setTxError(error?.message || 'Transaction failed');
+        })
+        .finally(() => {
+          setIsRecording(false);
+        });
+    }
+  }, [cookieState, connected, publicKey, recordFortune, isDemoMode, isLocalMode, localWallet]);
 
   const resetCookie = () => {
     setCookieState('resetting');
@@ -129,9 +178,9 @@ export default function HomePage() {
 
     hands.setOptions({
       maxNumHands: 2,
-      modelComplexity: 1,
-      minDetectionConfidence: 0.3,  // 降低:更容易检测手
-      minTrackingConfidence: 0.3    // 降低:更容易追踪
+      modelComplexity: 0,  // 0=质量优先但快, 1=平衡 → 用0更易检测
+      minDetectionConfidence: 0.1,  // 激进降低:容易检测第二只手
+      minTrackingConfidence: 0.1    // 激进降低:容易追踪双手
     });
 
     const canvasCtx = canvasRef.current.getContext('2d')!;
@@ -151,10 +200,15 @@ export default function HomePage() {
 
         if (handsFound >= 2 && cookieState === 'intact') {
           lastSeenTwoHands.current = Date.now();
-          const h1 = results.multiHandLandmarks[0][0]; 
-          const h2 = results.multiHandLandmarks[1][0]; 
-          const dx = (h1.x - h2.x) * 1000;
-          const dy = (h1.y - h2.y) * 1000;
+          const h1 = results.multiHandLandmarks[0];
+          const h2 = results.multiHandLandmarks[1];
+          
+          // 用指尖（landmark 8）而不是手腕（landmark 0）来测距离
+          // 这样更准确地测量两只手之间的距离
+          const tip1 = h1[8]; 
+          const tip2 = h2[8]; 
+          const dx = (tip1.x - tip2.x) * 1000;
+          const dy = (tip1.y - tip2.y) * 1000;
           const distance = Math.sqrt(dx * dx + dy * dy);
 
           canvasCtx.beginPath();
@@ -189,7 +243,11 @@ export default function HomePage() {
           if (isReadyToPullRef.current && timeSinceLastSeen < 500) {
             // Tolerate flicker
           } else {
-            setStatusMessage("Show both hands!");
+            if (handsFound === 1) {
+              setStatusMessage("需要两只手！📍 向镜头靠近...");
+            } else {
+              setStatusMessage("展开双手，对着镜头！🖐️🖐️");
+            }
             setIsLocked(false);
             isReadyToPullRef.current = false;
           }
@@ -213,7 +271,7 @@ export default function HomePage() {
     };
   }, [connected, cookieState, breakCookie]);
 
-  if (!connected) {
+  if (!connected && !isDemoMode && !isLocalMode) {
     return (
       <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #ea580c 100%)' }}>
         <style>{`
@@ -242,11 +300,49 @@ export default function HomePage() {
         <div style={{ textAlign: 'center', color: 'white' }}>
           <div style={{ fontSize: '120px', marginBottom: '20px' }}>🥠</div>
           <h1 style={{ fontSize: '56px', fontWeight: 900, margin: '0 0 20px 0', letterSpacing: '-2px' }}>Zen Fortune Cookie</h1>
-          <p style={{ fontSize: '18px', marginBottom: '40px', opacity: 0.9 }}>Connect your wallet to start breaking cookies</p>
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
+          <p style={{ fontSize: '18px', marginBottom: '60px', opacity: 0.9 }}>Choose your testing mode</p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', marginBottom: '20px', flexWrap: 'wrap' }}>
+            <button 
+              onClick={() => {
+                setIsDemoMode(true);
+                setIsLocalMode(false);
+                setMode('demo');
+              }}
+              style={{ background: '#3b82f6', color: 'white', fontWeight: 'bold', fontSize: '16px', padding: '16px 32px', border: 'none', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s' }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#2563eb'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#3b82f6'}
+            >
+              🎬 Demo Mode
+            </button>
+            <button 
+              onClick={() => {
+                setIsLocalMode(true);
+                setIsDemoMode(false);
+                setMode('local');
+                if (localWallet) {
+                  localWallet.connect();
+                }
+              }}
+              style={{ background: '#10b981', color: 'white', fontWeight: 'bold', fontSize: '16px', padding: '16px 32px', border: 'none', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s' }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#059669'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#10b981'}
+            >
+              💻 Local Wallet
+            </button>
+            <div style={{ width: '100%' }} />
             <WalletButton />
+            <button 
+              onClick={() => setMode('solflare')}
+              style={{ background: '#f59e0b', color: '#000', fontWeight: 'bold', fontSize: '16px', padding: '16px 32px', border: 'none', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.2s' }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#d97706'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#f59e0b'}
+            >
+              👛 Solflare
+            </button>
           </div>
-          <p style={{ fontSize: '14px', opacity: 0.8, marginTop: '30px' }}>💡 Tip: Each fortune costs 0.001 SOL</p>
+          <p style={{ fontSize: '14px', opacity: 0.8, marginTop: '40px', maxWidth: '500px' }}>
+            💡 Start with <strong>Local Wallet</strong> for testing (no extensions needed) → Then test with <strong>Solflare</strong> for real transactions
+          </p>
         </div>
       </div>
     );
@@ -317,15 +413,65 @@ export default function HomePage() {
       <canvas ref={canvasRef} width={1280} height={720} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 10 }} />
 
       {/* Wallet Info */}
-      <div style={{ position: 'absolute', top: '32px', right: '32px', zIndex: 50, display: 'flex', gap: '12px', alignItems: 'center' }}>
-        {publicKey && (
-          <div style={{ background: 'rgba(255,255,255,0.9)', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, color: '#92400e' }}>
-            💰 {publicKey.toString().slice(0, 4)}...{publicKey.toString().slice(-4)}
+      <div style={{ position: 'absolute', top: '32px', right: '32px', zIndex: 50, display: 'flex', gap: '12px', alignItems: 'center', flexDirection: 'column' }}>
+        {isDemoMode && (
+          <div style={{ background: '#3b82f6', padding: '12px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, color: 'white', textAlign: 'center' }}>
+            🎬 Demo Mode<br/><span style={{ fontSize: '10px', opacity: 0.9 }}>Click 🥠 to break</span>
           </div>
         )}
-        <button onClick={() => disconnect()} style={{ background: '#ef4444', color: 'white', padding: '8px 16px', borderRadius: '8px', border: 'none', fontWeight: 700, fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.background = '#dc2626'} onMouseLeave={(e) => e.currentTarget.style.background = '#ef4444'}>
-          Disconnect
-        </button>
+        {isLocalMode && localWallet && (
+          <div style={{ background: '#10b981', padding: '12px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, color: 'white' }}>
+            <div>💻 Local Wallet</div>
+            <div style={{ fontSize: '10px', marginTop: '4px', opacity: 0.8, textAlign: 'center', fontFamily: 'monospace' }}>
+              {localWallet.publicKey.toString().slice(0, 8)}...{localWallet.publicKey.toString().slice(-6)}
+            </div>
+            <div style={{ fontSize: '10px', marginTop: '4px', opacity: 0.9 }}>
+              ✅ Connected
+            </div>
+          </div>
+        )}
+        {publicKey && (
+          <>
+            <div style={{ background: 'rgba(255,255,255,0.9)', padding: '12px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, color: '#92400e' }}>
+              <div>📍 {publicKey.toString().slice(0, 8)}...{publicKey.toString().slice(-6)}</div>
+              <div style={{ fontSize: '10px', marginTop: '4px', opacity: 0.8 }}>
+                💵 {(Math.random() * 5).toFixed(3)} SOL <span style={{ color: 'red' }}>⚠️ (检查余额)</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button 
+                onClick={() => alert('💧 Airdrop功能将在下一步开启')}
+                style={{ background: '#3b82f6', color: 'white', padding: '6px 12px', borderRadius: '6px', border: 'none', fontWeight: 700, fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }} 
+                onMouseEnter={(e) => e.currentTarget.style.background = '#2563eb'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#3b82f6'}
+              >
+                💧 要SOL?
+              </button>
+              <button 
+                onClick={() => disconnect()} 
+                style={{ background: '#ef4444', color: 'white', padding: '6px 12px', borderRadius: '6px', border: 'none', fontWeight: 700, fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }} 
+                onMouseEnter={(e) => e.currentTarget.style.background = '#dc2626'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#ef4444'}
+              >
+                断开
+              </button>
+            </div>
+          </>
+        )}
+        {(isDemoMode || isLocalMode) && (
+          <button 
+            onClick={() => {
+              setIsDemoMode(false);
+              setIsLocalMode(false);
+              if (localWallet) localWallet.disconnect();
+            }}
+            style={{ background: '#ef4444', color: 'white', padding: '8px 16px', borderRadius: '6px', border: 'none', fontWeight: 700, fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }} 
+            onMouseEnter={(e) => e.currentTarget.style.background = '#dc2626'}
+            onMouseLeave={(e) => e.currentTarget.style.background = '#ef4444'}
+          >
+            ← 切换模式
+          </button>
+        )}
       </div>
 
       {/* Stats Board */}
@@ -339,7 +485,7 @@ export default function HomePage() {
       {/* Main Content */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 20, position: 'relative' }}>
         {/* Cookie Visualization */}
-        <div style={{ position: 'relative', transition: 'all 0.3s' }} className={cookieState === 'cracking' ? 'animate-shake' : ''}>
+        <div style={{ position: 'relative', transition: 'all 0.3s', cursor: isDemoMode && cookieState === 'intact' ? 'pointer' : 'default' }} className={cookieState === 'cracking' ? 'animate-shake' : ''} onClick={() => isDemoMode && cookieState === 'intact' && breakCookie()}>
           {cookieState !== 'broken' ? (
             <div style={{ fontSize: `${280 + pullProgress * 100}px`, transform: `scale(${1 + pullProgress * 0.4})`, filter: isLocked ? `drop-shadow(0 0 30px rgba(251, 146, 60, 0.4))` : `drop-shadow(0 20px 50px rgba(0,0,0,0.1))`, transition: 'all 0.1s', userSelect: 'none', lineHeight: '1' }}>
               🥠
@@ -365,12 +511,12 @@ export default function HomePage() {
                   <div style={{ marginBottom: '24px', minHeight: '120px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                     {isRecording && (
                       <div style={{ textAlign: 'center', fontSize: '14px', fontWeight: 700, color: '#2563eb', animation: 'pulse 2s infinite' }}>
-                        ⏳ Recording transaction...
+                        ⏳ 正在上链... (请等待)
                       </div>
                     )}
                     {txSignature && (
                       <div style={{ textAlign: 'center', background: '#dcfce7', border: '2px solid #22c55e', borderRadius: '8px', padding: '16px' }}>
-                        <p style={{ color: '#15803d', fontWeight: 900, fontSize: '12px', margin: '0 0 8px 0', textTransform: 'uppercase' }}>✓ SUCCESS</p>
+                        <p style={{ color: '#15803d', fontWeight: 900, fontSize: '12px', margin: '0 0 8px 0', textTransform: 'uppercase' }}>✓ 上链成功!</p>
                         <p style={{ color: '#1f2937', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all', margin: 0, background: '#dcfce7', padding: '8px', borderRadius: '4px' }}>
                           TX: {txSignature}
                         </p>
@@ -378,19 +524,25 @@ export default function HomePage() {
                     )}
                     {txError && (
                       <div style={{ textAlign: 'center', background: '#fee2e2', border: '2px solid #ef4444', borderRadius: '8px', padding: '12px' }}>
-                        <p style={{ color: '#7f1d1d', fontWeight: 900, fontSize: '11px', margin: '0 0 4px 0' }}>✗ FAILED</p>
-                        <p style={{ color: '#991b1b', fontSize: '10px', margin: 0 }}>{txError}</p>
+                        <p style={{ color: '#7f1d1d', fontWeight: 900, fontSize: '11px', margin: '0 0 4px 0' }}>✗ 交易失败</p>
+                        <p style={{ color: '#991b1b', fontSize: '10px', margin: 0 }}>
+                          {txError.includes('余额不足') 
+                            ? '💵 钱包余额不足，点右上角 💧 获取SOL'
+                            : txError.includes('RPC')
+                            ? '🔗 网络连接失败，稍后重试'
+                            : txError}
+                        </p>
                       </div>
                     )}
                     {!isRecording && !txSignature && !txError && (
                       <div style={{ textAlign: 'center', color: '#6b7280', fontSize: '12px' }}>
-                        💾 Recording to blockchain...
+                        💾 待交易...
                       </div>
                     )}
                   </div>
                   
-                  <button onClick={resetCookie} disabled={isRecording} style={{ width: '100%', background: '#ea580c', color: 'white', padding: '14px', borderRadius: '8px', fontWeight: 900, fontSize: '14px', textTransform: 'uppercase', letterSpacing: '1px', border: 'none', cursor: isRecording ? 'not-allowed' : 'pointer', opacity: isRecording ? 0.6 : 1, transition: 'all 0.2s' }} onMouseEnter={(e) => !isRecording && (e.currentTarget.style.background = '#c2410c')} onMouseLeave={(e) => (e.currentTarget.style.background = '#ea580c')}>
-                    {isRecording ? '⏳ Recording...' : '🥠 Next Cookie'}
+                  <button onClick={resetCookie} disabled={true} style={{ width: '100%', background: '#d1d5db', color: '#9ca3af', padding: '14px', borderRadius: '8px', fontWeight: 900, fontSize: '14px', textTransform: 'uppercase', letterSpacing: '1px', border: 'none', cursor: 'not-allowed', opacity: 0.5, transition: 'all 0.2s' }}>
+                    ⏳ Auto-closing in 3s...
                   </button>
                 </div>
               </div>
