@@ -218,13 +218,31 @@ export default function HomePage() {
           @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@700;900&display=swap');
           body { font-family: 'Poppins', sans-serif; margin: 0; overflow: hidden; }
           script { display: none; }
+          .wallet-button {
+            background: #f59e0b;
+            color: #000;
+            font-weight: bold;
+            font-size: 16px;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+          }
+          .wallet-button:hover {
+            background: #d97706;
+            transform: scale(1.05);
+          }
+          .wallet-button:active {
+            transform: scale(0.95);
+          }
         `}</style>
         <div style={{ textAlign: 'center', color: 'white' }}>
           <div style={{ fontSize: '120px', marginBottom: '20px' }}>🥠</div>
           <h1 style={{ fontSize: '56px', fontWeight: 900, margin: '0 0 20px 0', letterSpacing: '-2px' }}>Zen Fortune Cookie</h1>
           <p style={{ fontSize: '18px', marginBottom: '40px', opacity: 0.9 }}>Connect your wallet to start breaking cookies</p>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
-            <WalletMultiButton style={{ background: '#f59e0b', color: '#000', fontWeight: 'bold', fontSize: '16px', padding: '12px 24px' }} />
+            <WalletMultiButton className="wallet-button" />
           </div>
           <p style={{ fontSize: '14px', opacity: 0.8, marginTop: '30px' }}>💡 Tip: Each fortune costs 0.001 SOL</p>
         </div>
@@ -281,6 +299,14 @@ export default function HomePage() {
         .paper-texture {
           background: linear-gradient(to bottom, #fff 0%, #f9f9f9 100%);
           box-shadow: 0 4px 15px rgba(0,0,0,0.1), inset 0 0 10px rgba(0,0,0,0.02);
+        }
+
+        @media (max-width: 768px) {
+          body { font-size: 14px; }
+        }
+        
+        @media (max-width: 480px) {
+          body { font-size: 12px; }
         }
       `}</style>
 
