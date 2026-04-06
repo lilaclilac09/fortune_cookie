@@ -77,10 +77,13 @@ export function useFortuneCookie(): FortuneCookieHook {
                 stats: statsAccount,
                 systemProgram: SystemProgram.programId,
               })
-              .rpc({ skipPreflight: false });
+              .rpc({ skipPreflight: false, commitment: 'confirmed' });
             console.log('✅ Stats initialized:', initTx);
-          } catch (initError) {
-            console.log('Stats might already exist, continuing...');
+            // Wait a bit for account to be available
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } catch (initError: any) {
+            console.log('⚠️ Stats init error (might exist):', initError?.message);
+            // Continue anyway - account might already exist
           }
         }
 
@@ -93,14 +96,25 @@ export function useFortuneCookie(): FortuneCookieHook {
             stats: statsAccount,
             systemProgram: SystemProgram.programId,
           })
-          .rpc({ skipPreflight: false, commitment: 'confirmed' });
+          .rpc({ skipPreflight: false, commitment: 'confirmed', maxRetries: 10 });
 
+        // Verify transaction was actually processed
         console.log('✅ Fortune recorded on-chain:', {
           tx,
           user: publicKey.toString(),
           archetype,
           cookie: cookieAccount.toString(),
         });
+
+        // Check if transaction actually confirmed
+        const txDetails = await connection.getTransaction(tx, {
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        });
+        
+        if (txDetails?.meta?.err) {
+          throw new Error(`Transaction failed on-chain: ${JSON.stringify(txDetails.meta.err)}`);
+        }
 
         return tx;
       } catch (err) {
