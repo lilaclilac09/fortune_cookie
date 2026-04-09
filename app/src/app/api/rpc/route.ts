@@ -3,7 +3,13 @@ import https from 'node:https';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
 const RPC_URL = process.env.SOLANA_RPC_INTERNAL ?? 'https://api.devnet.solana.com';
-const proxyUrl = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? process.env.ALL_PROXY;
+const proxyUrl =
+  process.env.https_proxy ??
+  process.env.http_proxy ??
+  process.env.HTTPS_PROXY ??
+  process.env.HTTP_PROXY ??
+  process.env.ALL_PROXY ??
+  process.env.all_proxy;
 
 function httpsPost(url: string, body: string): Promise<string> {
   return new Promise((resolve, reject) => {
