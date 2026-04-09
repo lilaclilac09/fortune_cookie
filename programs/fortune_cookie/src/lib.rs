@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("GpPcUYfhJzGwpN1xwNMHRiEGmj2BnvAtPkZSn2Nyi8n8");
+declare_id!("DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85");
 
 #[program]
 pub mod fortune_cookie {

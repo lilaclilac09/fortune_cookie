@@ -7,7 +7,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-fortune_cookie = "GpPcUYfhJzGwpN1xwNMHRiEGmj2BnvAtPkZSn2Nyi8n8"
+fortune_cookie = "DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85"
+
+[programs.devnet]
+fortune_cookie = "DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85"
 
 [registry]
 url = "https://api.apr.dev"

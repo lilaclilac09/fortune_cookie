@@ -33,7 +33,7 @@ export function WalletModeProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const [mode, setMode] = useState<WalletMode>('demo');
+  const [mode, setMode] = useState<WalletMode>('solflare');
   const [localWallet, setLocalWallet] = useState<LocalWallet | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
 

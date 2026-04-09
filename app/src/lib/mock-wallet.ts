@@ -22,16 +22,18 @@ export class LocalWallet implements WalletAdapter {
   constructor(keypairSeed?: Uint8Array) {
     // 如果提供了seed，用seed创建；否则随机生成
     if (keypairSeed) {
-      this.keypair = Keypair.fromSecretKey(keypairSeed);
+      // 64字节用fromSecretKey，32字节用fromSeed
+      this.keypair = keypairSeed.length === 64
+        ? Keypair.fromSecretKey(keypairSeed)
+        : Keypair.fromSeed(keypairSeed);
     } else {
-      // 使用固定的seed以便测试时钱包地址保持一致
       const fixedSeed = new Uint8Array([
         72, 66, 220, 189, 149, 12, 40, 197,
         140, 216, 203, 20, 181, 154, 255, 177,
         124, 217, 255, 99, 182, 115, 116, 226,
         48, 146, 35, 132, 96, 100, 155, 123,
       ]);
-      this.keypair = Keypair.fromSecretKey(fixedSeed);
+      this.keypair = Keypair.fromSeed(fixedSeed);
     }
     this.publicKey = this.keypair.publicKey;
   }

@@ -8,7 +8,7 @@ import {
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import {
   PhantomWalletAdapter,
-  SolflareWalletAdapter
+  SolflareWalletAdapter,
 } from "@solana/wallet-adapter-wallets";
 import { WalletModeProvider } from "@/components/WalletModeSelector";
 
