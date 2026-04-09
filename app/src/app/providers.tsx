@@ -17,8 +17,13 @@ export default function Providers({
 }: {
   children: React.ReactNode;
 }) {
-  const endpoint =
+  const rawEndpoint =
     process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
+  // If it's a relative path (proxy), make it absolute using current origin
+  const endpoint =
+    typeof window !== 'undefined' && rawEndpoint.startsWith('/')
+      ? `${window.location.origin}${rawEndpoint}`
+      : rawEndpoint;
 
   const wallets = useMemo(
     () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
