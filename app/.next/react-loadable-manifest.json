@@ -394,5 +394,11 @@
   "../node_modules/viem/_esm/utils/signature/recoverPublicKey.js -> @noble/curves/secp256k1": {
     "id": "../node_modules/viem/_esm/utils/signature/recoverPublicKey.js -> @noble/curves/secp256k1",
     "files": []
+  },
+  "app/page.tsx -> @/components/WalletButton": {
+    "id": "app/page.tsx -> @/components/WalletButton",
+    "files": [
+      "static/chunks/_app-pages-browser_src_components_WalletButton_tsx.js"
+    ]
   }
 }
