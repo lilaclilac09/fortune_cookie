@@ -1,0 +1,21 @@
+{
+  "name": "fortune-cookie-tests",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "mocha --import=tsx --timeout 60000 '*.test.ts'"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "0.29.0",
+    "@solana/web3.js": "^1.98.0",
+    "solana-bankrun": "^0.4.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10",
+    "@types/node": "^20",
+    "mocha": "^10",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}
