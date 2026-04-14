@@ -1,9 +1,13 @@
 /**
  * fortune_cookie bankrun tests
- * Uses solana-bankrun for fast in-memory VM — no local validator needed.
- * Program binary loaded from: ../target/deploy/fortune_cookie.so
+ * Uses solana-bankrun + anchor-bankrun for fast in-memory VM.
+ * Anchor 0.30 requires discriminators in the IDL; we compute and inject them
+ * here so the app's IDL file (Anchor 0.29 format) stays unchanged.
+ *
+ * Program binary: ../target/deploy/fortune_cookie.so
  */
 
+import * as crypto from "crypto";
 import * as anchor from "@coral-xyz/anchor";
 import { Program, BN } from "@coral-xyz/anchor";
 import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
@@ -17,6 +21,81 @@ const PROGRAM_ID = new PublicKey("DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85")
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { IDL } = require("../app/src/hooks/fortune_cookie_idl");
 
+// ── Discriminator helpers ────────────────────────────────────────────────────
+
+function disc(namespace: string, name: string): number[] {
+  return Array.from(
+    crypto.createHash("sha256").update(`${namespace}:${name}`).digest().slice(0, 8)
+  );
+}
+
+/**
+ * Anchor 0.29 → 0.30 IDL type conversion.
+ * "publicKey" → "pubkey" (the only rename we need for this program).
+ */
+function convertType(t: any): any {
+  if (t === "publicKey") return "pubkey";
+  if (typeof t === "object" && t !== null) {
+    const result: any = {};
+    for (const [k, v] of Object.entries(t)) {
+      result[k] = convertType(v);
+    }
+    return result;
+  }
+  return t;
+}
+
+function convertFields(fields: any[]): any[] {
+  return fields.map((f: any) => ({ ...f, type: convertType(f.type) }));
+}
+
+/**
+ * Upgrade an Anchor 0.29 IDL to 0.30 format.
+ *
+ * Key changes in 0.30:
+ *  - Each instruction gets a `discriminator` field
+ *  - Account struct definitions move from `accounts[*].type` → `types[]`
+ *  - `accounts[]` retains only `name` + `discriminator`
+ *  - Field type "publicKey" → "pubkey"
+ *  - Top-level `address` replaces the old `metadata.address`
+ *
+ * The original IDL object is NOT mutated.
+ */
+function addDiscriminators(idl: any): any {
+  // Promote account type definitions to top-level `types`, converting field types
+  const accountTypes = (idl.accounts ?? []).map((acc: any) => ({
+    name: acc.name,
+    type: {
+      ...acc.type,
+      fields: convertFields(acc.type?.fields ?? []),
+    },
+  }));
+
+  return {
+    ...idl,
+    address: PROGRAM_ID.toBase58(),
+    instructions: idl.instructions.map((ix: any) => ({
+      ...ix,
+      discriminator: disc("global", ix.name),
+      args: convertFields(ix.args ?? []),
+    })),
+    accounts: (idl.accounts ?? []).map((acc: any) => ({
+      name: acc.name,
+      discriminator: disc("account", acc.name),
+    })),
+    types: [...(idl.types ?? []), ...accountTypes],
+    events: idl.events?.map((ev: any) => ({
+      ...ev,
+      discriminator: disc("event", ev.name),
+      fields: convertFields(ev.fields ?? []),
+    })),
+  };
+}
+
+const IDL30 = addDiscriminators(IDL);
+
+// ── PDA helpers ──────────────────────────────────────────────────────────────
+
 function statsPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([Buffer.from("stats")], PROGRAM_ID);
 }
@@ -27,6 +106,8 @@ function cookiePda(user: PublicKey, counter: BN): [PublicKey, number] {
     PROGRAM_ID
   );
 }
+
+// ── Test suite ───────────────────────────────────────────────────────────────
 
 describe("fortune_cookie (bankrun)", () => {
   let program: any;
@@ -40,9 +121,8 @@ describe("fortune_cookie (bankrun)", () => {
     );
     payer = context.payer;
     const provider = new BankrunProvider(context);
-    // Anchor 0.30+: programId from IDL metadata, or pass explicitly as second arg
-    const idlWithAddress = { ...IDL, address: PROGRAM_ID.toBase58() };
-    program = new Program(idlWithAddress, provider);
+    anchor.setProvider(provider as any);
+    program = new Program(IDL30, provider as any);
   });
 
   // ── initialize_stats ────────────────────────────────────────────────────
@@ -129,9 +209,11 @@ describe("fortune_cookie (bankrun)", () => {
       assert.fail("Expected error for archetype=4");
     } catch (err: any) {
       const msg = err?.message ?? String(err);
+      // Anchor error 6000 = InvalidArchetype; bankrun may surface it as
+      // "0x1770" (hex), "6000" (decimal), or the named variant
       assert.ok(
-        msg.includes("InvalidArchetype") || msg.includes("6000"),
-        `Expected InvalidArchetype (6000), got: ${msg}`
+        msg.includes("InvalidArchetype") || msg.includes("6000") || msg.includes("1770"),
+        `Expected InvalidArchetype (6000 / 0x1770), got: ${msg}`
       );
     }
   });
