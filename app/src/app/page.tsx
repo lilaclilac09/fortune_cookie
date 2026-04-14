@@ -133,20 +133,36 @@ export default function HomePage() {
   };
 
   // Shake-to-crack (mobile accelerometer)
-  useEffect(() => {
-    const onMotion = (e: DeviceMotionEvent) => {
-      const a = e.accelerationIncludingGravity;
-      if (!a) return;
-      const mag = Math.sqrt((a.x || 0) ** 2 + (a.y || 0) ** 2 + (a.z || 0) ** 2);
-      const now = Date.now();
-      if (mag > 22 && now - lastShakeRef.current > 1200 && cookieState === 'intact') {
-        lastShakeRef.current = now;
-        breakCookie();
-      }
+  // iOS 13+ requires DeviceMotionEvent.requestPermission() from a user gesture.
+  // We request on first pointerdown so no extra button is needed.
+  const shakeListenerRef = useRef(false);
+
+  const attachShakeListener = useCallback(() => {
+    if (shakeListenerRef.current) return;
+    const listen = () => {
+      shakeListenerRef.current = true;
+      window.addEventListener('devicemotion', (e: DeviceMotionEvent) => {
+        const a = e.accelerationIncludingGravity;
+        if (!a) return;
+        const mag = Math.sqrt((a.x || 0) ** 2 + (a.y || 0) ** 2 + (a.z || 0) ** 2);
+        const now = Date.now();
+        if (mag > 22 && now - lastShakeRef.current > 1200) {
+          lastShakeRef.current = now;
+          breakCookie();
+        }
+      });
     };
-    window.addEventListener('devicemotion', onMotion);
-    return () => window.removeEventListener('devicemotion', onMotion);
-  }, [cookieState, breakCookie]);
+
+    // iOS 13+ needs explicit permission from a user gesture
+    const DME = DeviceMotionEvent as any;
+    if (typeof DME.requestPermission === 'function') {
+      DME.requestPermission().then((state: string) => {
+        if (state === 'granted') listen();
+      }).catch(() => {/* denied or unavailable */});
+    } else {
+      listen();
+    }
+  }, [breakCookie]);
 
   // Drag-to-crack pointer handlers
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -155,7 +171,8 @@ export default function HomePage() {
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     setIsDragging(true);
     setDragProgress(0);
-  }, [cookieState]);
+    attachShakeListener(); // iOS: request motion permission on first touch
+  }, [cookieState, attachShakeListener]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDragging || !dragStartRef.current) return;
