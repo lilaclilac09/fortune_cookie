@@ -347,7 +347,7 @@ export default function HomePage() {
           )}
         </div>
 
-        <div style={{ marginTop: '80px', padding: '24px 48px', borderRadius: '24px', border: `4px solid ${isDragging && dragProgress > 0.7 ? '#ef4444' : '#fed7aa'}`, boxShadow: '0 20px 25px rgba(0,0,0,0.1)', minWidth: '380px', textAlign: 'center', background: 'rgba(255,255,255,0.9)', color: '#1f2937', fontWeight: 700, fontSize: '16px', transition: 'border-color 0.2s' }}>
+        <div style={{ marginTop: '80px', padding: '24px 48px', borderRadius: '24px', border: `4px solid ${isDragging && dragProgress > 0.7 ? '#ef4444' : '#fed7aa'}`, boxShadow: '0 20px 25px rgba(0,0,0,0.1)', minWidth: 'min(380px, 90vw)', textAlign: 'center', background: 'rgba(255,255,255,0.9)', color: '#1f2937', fontWeight: 700, fontSize: '16px', transition: 'border-color 0.2s' }}>
           {isDragging
             ? dragProgress > 0.7
               ? '🔥 Almost — let go!'
