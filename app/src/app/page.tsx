@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useFortuneCookie } from '@/hooks/useFortuneCookieRealBlockchain';
@@ -69,6 +69,13 @@ export default function HomePage() {
   const [isRecording, setIsRecording] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
 
+  // Drag-to-crack state
+  const [dragProgress, setDragProgress] = useState(0); // 0–1
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const lastShakeRef = useRef(0);
+  const DRAG_THRESHOLD = 90; // px to travel before crack
+
   const breakCookie = useCallback(() => {
     if (cookieState !== 'intact') return;
 
@@ -124,6 +131,52 @@ export default function HomePage() {
       setTxError(null);
     }, 300);
   };
+
+  // Shake-to-crack (mobile accelerometer)
+  useEffect(() => {
+    const onMotion = (e: DeviceMotionEvent) => {
+      const a = e.accelerationIncludingGravity;
+      if (!a) return;
+      const mag = Math.sqrt((a.x || 0) ** 2 + (a.y || 0) ** 2 + (a.z || 0) ** 2);
+      const now = Date.now();
+      if (mag > 22 && now - lastShakeRef.current > 1200 && cookieState === 'intact') {
+        lastShakeRef.current = now;
+        breakCookie();
+      }
+    };
+    window.addEventListener('devicemotion', onMotion);
+    return () => window.removeEventListener('devicemotion', onMotion);
+  }, [cookieState, breakCookie]);
+
+  // Drag-to-crack pointer handlers
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (cookieState !== 'intact') return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    setIsDragging(true);
+    setDragProgress(0);
+  }, [cookieState]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging || !dragStartRef.current) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const progress = Math.min(dist / DRAG_THRESHOLD, 1);
+    setDragProgress(progress);
+    if (progress >= 1) {
+      dragStartRef.current = null;
+      setIsDragging(false);
+      setDragProgress(0);
+      breakCookie();
+    }
+  }, [isDragging, breakCookie, DRAG_THRESHOLD]);
+
+  const handlePointerUp = useCallback(() => {
+    setIsDragging(false);
+    setDragProgress(0);
+    dragStartRef.current = null;
+  }, []);
 
   if (!connected && !isDemoMode && !isLocalMode) {
     return (
@@ -206,13 +259,45 @@ export default function HomePage() {
       {/* Main Content */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 20, position: 'relative' }}>
         <div
-          style={{ position: 'relative', transition: 'all 0.3s', cursor: cookieState === 'intact' ? 'pointer' : 'default' }}
+          style={{
+            position: 'relative',
+            transition: isDragging ? 'none' : 'transform 0.35s, filter 0.35s',
+            cursor: cookieState !== 'intact' ? 'default' : isDragging ? 'grabbing' : 'grab',
+            transform: isDragging
+              ? `rotate(${(dragProgress * 14) - 7}deg) scale(${1 + dragProgress * 0.1})`
+              : undefined,
+            filter: isDragging
+              ? `brightness(${1 + dragProgress * 0.35}) saturate(${1 + dragProgress * 0.6}) drop-shadow(0 0 ${dragProgress * 40}px ${dragProgress > 0.7 ? 'rgba(239,68,68,0.6)' : 'rgba(245,158,11,0.5)'})`
+              : undefined,
+          }}
           className={cookieState === 'cracking' ? 'animate-shake' : ''}
-          onClick={() => cookieState === 'intact' && breakCookie()}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
         >
           {cookieState !== 'broken' ? (
-            <div style={{ fontSize: '280px', filter: 'drop-shadow(0 20px 50px rgba(0,0,0,0.1))', userSelect: 'none', lineHeight: '1' }}>
-              🥠
+            <div style={{ position: 'relative', display: 'inline-block', userSelect: 'none' }}>
+              {/* Tension ring — fills as you drag */}
+              <svg
+                style={{ position: 'absolute', inset: '-20px', width: 'calc(100% + 40px)', height: 'calc(100% + 40px)', pointerEvents: 'none', opacity: dragProgress > 0 ? 1 : 0, transition: isDragging ? 'none' : 'opacity 0.3s' }}
+                viewBox="0 0 320 320"
+              >
+                <circle
+                  cx="160" cy="160" r="140"
+                  fill="none"
+                  stroke={dragProgress > 0.7 ? '#ef4444' : '#f59e0b'}
+                  strokeWidth="5"
+                  strokeLinecap="round"
+                  strokeDasharray={`${2 * Math.PI * 140}`}
+                  strokeDashoffset={`${2 * Math.PI * 140 * (1 - dragProgress)}`}
+                  transform="rotate(-90 160 160)"
+                  style={{ transition: isDragging ? 'stroke 0.1s' : 'all 0.3s' }}
+                />
+              </svg>
+              <div style={{ fontSize: '280px', filter: 'drop-shadow(0 20px 50px rgba(0,0,0,0.1))', lineHeight: '1' }}>
+                🥠
+              </div>
             </div>
           ) : (
             <div style={{ position: 'relative', width: '400px', height: '400px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -262,8 +347,12 @@ export default function HomePage() {
           )}
         </div>
 
-        <div style={{ marginTop: '80px', padding: '24px 48px', borderRadius: '24px', border: '4px solid #fed7aa', boxShadow: '0 20px 25px rgba(0,0,0,0.1)', minWidth: '380px', textAlign: 'center', background: 'rgba(255,255,255,0.9)', color: '#1f2937', fontWeight: 700, fontSize: '16px' }}>
-          👆 点击 🥠 开始
+        <div style={{ marginTop: '80px', padding: '24px 48px', borderRadius: '24px', border: `4px solid ${isDragging && dragProgress > 0.7 ? '#ef4444' : '#fed7aa'}`, boxShadow: '0 20px 25px rgba(0,0,0,0.1)', minWidth: '380px', textAlign: 'center', background: 'rgba(255,255,255,0.9)', color: '#1f2937', fontWeight: 700, fontSize: '16px', transition: 'border-color 0.2s' }}>
+          {isDragging
+            ? dragProgress > 0.7
+              ? '🔥 Almost — let go!'
+              : `✊ Keep pulling… ${Math.round(dragProgress * 100)}%`
+            : '✊ Drag to crack · 📱 Shake on mobile'}
         </div>
       </div>
     </main>

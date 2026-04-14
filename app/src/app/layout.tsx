@@ -29,9 +29,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <script async src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossOrigin="anonymous" />
-        <script async src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossOrigin="anonymous" />
-        <script async src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossOrigin="anonymous" />
+        {/* MediaPipe scripts removed — camera/gesture feature disabled for now */}
       </head>
       <body className={`${spaceGrotesk.variable} ${plexMono.variable}`}>
         <Providers>{children}</Providers>

@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { validateCode, getCodesList } from '@/lib/simple-invite';
-import GestureDetector from './GestureDetector';
 
 export default function FloatingToyBox() {
   const { publicKey } = useWallet();
