@@ -1,5 +1,6 @@
 // Auto-generated IDL type
 export const IDL = {
+  "address": "DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85",
   "version": "0.1.0",
   "name": "fortune_cookie",
   "instructions": [

@@ -6,6 +6,7 @@ import { IDL } from './fortune_cookie_idl';
 import { useWalletMode } from '@/components/WalletModeSelector';
 
 const PROGRAM_ID = new PublicKey('DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85');
+// Anchor 0.30+: program ID must live in IDL.address; constructor is Program(idl, provider)
 
 interface FortuneCookieHook {
   recordFortune: (archetype: number) => Promise<string>;
@@ -44,7 +45,7 @@ export function useFortuneCookie(): FortuneCookieHook {
             { commitment: 'confirmed' }
           );
 
-          const program = new anchor.Program(IDL as any, PROGRAM_ID, provider);
+          const program = new anchor.Program(IDL as any, provider);
           const counterSeed = Math.floor(Date.now() / 1000);
 
           const [statsAccount] = PublicKey.findProgramAddressSync(
@@ -169,7 +170,7 @@ export function useFortuneCookie(): FortuneCookieHook {
           { commitment: 'confirmed' }
         );
 
-        const program = new anchor.Program(IDL as any, PROGRAM_ID, provider);
+        const program = new anchor.Program(IDL as any, provider);
         const counterSeed = Math.floor(Date.now() / 1000);
 
         const [statsAccount] = PublicKey.findProgramAddressSync(
