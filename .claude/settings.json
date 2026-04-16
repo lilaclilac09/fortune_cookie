@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"console.log\\(require\\('/Users/aileen/fortune_cookie/app/node_modules/@coral-xyz/anchor/package.json'\\).version\\)\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(curl -s http://localhost:3000)"
+    ]
+  }
+}
