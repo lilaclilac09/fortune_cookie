@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useFortuneCookie } from '@/hooks/useFortuneCookieRealBlockchain';
@@ -34,12 +34,23 @@ const FORTUNES: string[] = [
 ];
 
 const STORAGE_KEY = 'zen_fortune_stats';
+const TX_HISTORY_KEY = 'zen_tx_history';
 const CRACK_COST_SOL = 0.001;
+const RARITY_LABEL = ['Common', 'Uncommon', 'Rare', '🌟 Legendary'];
+const RARITY_COLOR = ['#6b7280', '#3b82f6', '#a855f7', '#f59e0b'];
+
+interface TxRecord {
+  sig: string;
+  fortune: string;
+  points: number;
+  ts: number;
+  rarity?: number;
+}
 
 export default function HomePage() {
   const { publicKey, connected, disconnect } = useWallet();
   const { mode, setMode, localWallet } = useWalletMode();
-  const { recordFortune } = useFortuneCookie();
+  const { recordFortune, sessionBalance, needsFunding, fundSession, sessionPubkey } = useFortuneCookie();
   const [isDemoMode, setIsDemoMode] = useState(mode === 'demo');
   const [isLocalMode, setIsLocalMode] = useState(mode === 'local');
 
@@ -63,6 +74,22 @@ export default function HomePage() {
     }
   }, [connected]);
 
+  const [txHistory, setTxHistory] = useState<TxRecord[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(TX_HISTORY_KEY);
+    if (saved) try { setTxHistory(JSON.parse(saved)); } catch {}
+  }, []);
+
+  const pushTx = (record: TxRecord) => {
+    setTxHistory(prev => {
+      const next = [record, ...prev].slice(0, 100); // keep last 100
+      localStorage.setItem(TX_HISTORY_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
   const [cookieState, setCookieState] = useState<CookieState>('intact');
   const [currentFortune, setCurrentFortune] = useState<Fortune | null>(null);
   const [txSignature, setTxSignature] = useState<string | null>(null);
@@ -80,36 +107,37 @@ export default function HomePage() {
     setTxError(null);
     setTxSignature(null);
 
+    // After shake animation, reveal fortune paper — stays open until user clicks 再来一次
     setTimeout(() => {
       setCookieState('broken');
       setCurrentFortune({ text: randomFortune, points });
       setStats(prev => ({ totalPoints: prev.totalPoints + points, tapCount: prev.tapCount + 1 }));
     }, 400);
 
-    setTimeout(() => {
-      setCookieState('resetting');
-      setTimeout(() => {
-        setCookieState('intact');
-        setCurrentFortune(null);
-      }, 300);
-    }, 5000);
-
     if (isDemoMode) {
       setIsRecording(true);
       setTimeout(() => {
-        setTxSignature('demo_tx_' + Math.random().toString(36).slice(2, 10));
+        const sig = 'demo_tx_' + Math.random().toString(36).slice(2, 10);
+        setTxSignature(sig);
         setIsRecording(false);
-      }, 1000);
+        pushTx({ sig, fortune: randomFortune, points, ts: Date.now() });
+      }, 200);
     } else if (isLocalMode && localWallet) {
       setIsRecording(true);
       recordFortune(archetype)
-        .then((signature) => setTxSignature(signature))
+        .then((sig) => {
+          setTxSignature(sig);
+          pushTx({ sig, fortune: randomFortune, points, ts: Date.now() });
+        })
         .catch((error: any) => setTxError(error?.message || 'Transaction failed'))
         .finally(() => setIsRecording(false));
     } else if (connected && publicKey) {
       setIsRecording(true);
       recordFortune(archetype)
-        .then((signature) => setTxSignature(signature))
+        .then((sig) => {
+          setTxSignature(sig);
+          pushTx({ sig, fortune: randomFortune, points, ts: Date.now() });
+        })
         .catch((error: any) => setTxError(error?.message || 'Transaction failed'))
         .finally(() => setIsRecording(false));
     }
@@ -172,6 +200,20 @@ export default function HomePage() {
             <div style={{ fontSize: '10px', marginTop: '4px' }}>✅ Connected</div>
           </div>
         )}
+        {/* Session wallet auto-approval status */}
+        {sessionPubkey && !isDemoMode && (
+          <div style={{ background: needsFunding ? '#1c1917' : '#052e16', border: `2px solid ${needsFunding ? '#f59e0b' : '#22c55e'}`, padding: '10px 14px', borderRadius: '10px', fontSize: '11px', fontWeight: 700, color: 'white', minWidth: '180px' }}>
+            <div style={{ fontSize: '12px', marginBottom: '3px' }}>
+              {needsFunding ? '⏳ Preparing session...' : '⚡ AUTO-APPROVE ON ✓'}
+            </div>
+            <div style={{ opacity: 0.7, fontSize: '9px', fontFamily: 'monospace', marginBottom: '3px' }}>
+              {sessionPubkey.toString().slice(0, 8)}...{sessionPubkey.toString().slice(-6)}
+            </div>
+            <div style={{ color: needsFunding ? '#fbbf24' : '#4ade80', fontSize: '10px' }}>
+              {sessionBalance.toFixed(4)} SOL {needsFunding ? '— airdropping...' : '— no popup needed'}
+            </div>
+          </div>
+        )}
         {publicKey && (
           <>
             <div style={{ background: 'rgba(255,255,255,0.9)', padding: '12px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, color: '#92400e' }}>
@@ -201,7 +243,47 @@ export default function HomePage() {
           <div>🎯 {stats.tapCount} Opened</div>
           <div style={{ fontSize: '20px', fontWeight: 900, marginTop: '8px' }}>{stats.totalPoints} PTS</div>
         </div>
+        {txHistory.length > 0 && (
+          <button
+            onClick={() => setShowHistory(h => !h)}
+            style={{ marginTop: '10px', width: '100%', background: 'rgba(255,255,255,0.3)', color: 'white', border: '1px solid rgba(255,255,255,0.5)', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+          >
+            {showHistory ? '▲ Hide' : `📜 History (${txHistory.length})`}
+          </button>
+        )}
       </div>
+
+      {/* TX History Panel */}
+      {showHistory && txHistory.length > 0 && (
+        <div style={{ position: 'absolute', top: '140px', left: '32px', width: '320px', maxHeight: '60vh', overflowY: 'auto', background: 'rgba(15,23,42,0.95)', backdropFilter: 'blur(12px)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.15)', zIndex: 40, padding: '12px' }}>
+          <div style={{ color: 'white', fontWeight: 900, fontSize: '12px', marginBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.15)', paddingBottom: '8px' }}>
+            📜 On-Chain History
+          </div>
+          {txHistory.map((rec, i) => (
+            <div key={i} style={{ marginBottom: '8px', padding: '8px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', borderLeft: `3px solid ${rec.rarity !== undefined ? RARITY_COLOR[rec.rarity] : '#6b7280'}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <span style={{ color: '#fbbf24', fontWeight: 700, fontSize: '11px' }}>+{rec.points} PTS</span>
+                <span style={{ color: '#9ca3af', fontSize: '10px' }}>{new Date(rec.ts).toLocaleTimeString()}</span>
+              </div>
+              <div style={{ color: '#e5e7eb', fontSize: '10px', fontStyle: 'italic', marginBottom: '4px', lineHeight: '1.4' }}>
+                "{rec.fortune.length > 50 ? rec.fortune.slice(0, 50) + '…' : rec.fortune}"
+              </div>
+              {rec.sig.startsWith('demo_') ? (
+                <span style={{ color: '#6b7280', fontSize: '9px', fontFamily: 'monospace' }}>demo — {rec.sig}</span>
+              ) : (
+                <a
+                  href={`https://solscan.io/tx/${rec.sig}?cluster=devnet`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: '#60a5fa', fontSize: '9px', fontFamily: 'monospace', textDecoration: 'none', wordBreak: 'break-all' }}
+                >
+                  {rec.sig.slice(0, 16)}...{rec.sig.slice(-8)} ↗
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Main Content */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 20, position: 'relative' }}>
@@ -227,28 +309,44 @@ export default function HomePage() {
                     <span style={{ color: '#b45309', fontWeight: 900, fontSize: '18px' }}>+{currentFortune?.points} PTS</span>
                     <span style={{ color: '#92400e', fontWeight: 700, fontSize: '14px' }}>⚡ {CRACK_COST_SOL} SOL</span>
                   </div>
-                  <div style={{ marginBottom: '24px', minHeight: '80px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                  {/* On-chain status — always visible, never auto-dismissed */}
+                  <div style={{ marginBottom: '16px' }}>
                     {isRecording && (
-                      <div style={{ textAlign: 'center', fontSize: '14px', fontWeight: 700, color: '#2563eb' }}>
-                        ⏳ 正在上链...
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#eff6ff', border: '2px solid #93c5fd', borderRadius: '10px', padding: '12px 16px' }}>
+                        <span style={{ fontSize: '18px' }}>⚡</span>
+                        <div>
+                          <p style={{ color: '#1d4ed8', fontWeight: 900, fontSize: '13px', margin: 0 }}>Auto-signing on-chain...</p>
+                          <p style={{ color: '#3b82f6', fontSize: '11px', margin: '2px 0 0 0' }}>No popup needed — session wallet</p>
+                        </div>
                       </div>
                     )}
-                    {txSignature && (
-                      <div style={{ textAlign: 'center', background: '#dcfce7', border: '2px solid #22c55e', borderRadius: '8px', padding: '16px' }}>
-                        <p style={{ color: '#15803d', fontWeight: 900, fontSize: '12px', margin: '0 0 8px 0' }}>✓ 上链成功!</p>
-                        <p style={{ color: '#1f2937', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all', margin: 0 }}>
-                          TX: {txSignature}
-                        </p>
+                    {txSignature && !isRecording && (
+                      <div style={{ background: '#dcfce7', border: '2px solid #22c55e', borderRadius: '10px', padding: '12px 16px' }}>
+                        <p style={{ color: '#15803d', fontWeight: 900, fontSize: '13px', margin: '0 0 6px 0' }}>✓ On-chain confirmed!</p>
+                        {txSignature.startsWith('demo_') ? (
+                          <span style={{ color: '#6b7280', fontSize: '10px', fontFamily: 'monospace' }}>{txSignature}</span>
+                        ) : (
+                          <a
+                            href={`https://solscan.io/tx/${txSignature}?cluster=devnet`}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ display: 'block', color: '#166534', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all', textDecoration: 'underline' }}
+                          >
+                            {txSignature.slice(0, 24)}...{txSignature.slice(-12)} ↗
+                          </a>
+                        )}
                       </div>
                     )}
                     {txError && (
-                      <div style={{ textAlign: 'center', background: '#fee2e2', border: '2px solid #ef4444', borderRadius: '8px', padding: '12px' }}>
-                        <p style={{ color: '#7f1d1d', fontWeight: 900, fontSize: '11px', margin: '0 0 4px 0' }}>✗ 交易失败</p>
-                        <p style={{ color: '#991b1b', fontSize: '10px', margin: 0 }}>{txError}</p>
+                      <div style={{ background: '#fee2e2', border: '2px solid #ef4444', borderRadius: '10px', padding: '12px 16px' }}>
+                        <p style={{ color: '#7f1d1d', fontWeight: 900, fontSize: '13px', margin: '0 0 4px 0' }}>✗ TX Failed</p>
+                        <p style={{ color: '#991b1b', fontSize: '10px', margin: 0, wordBreak: 'break-all' }}>{txError}</p>
                       </div>
                     )}
-                    {!isRecording && !txSignature && !txError && (
-                      <div style={{ textAlign: 'center', color: '#6b7280', fontSize: '12px' }}>💾 待交易...</div>
+                    {!isDemoMode && !isRecording && !txSignature && !txError && (
+                      <div style={{ background: '#fefce8', border: '1px solid #fde68a', borderRadius: '10px', padding: '10px 14px', textAlign: 'center', color: '#92400e', fontSize: '11px' }}>
+                        待上链...
+                      </div>
                     )}
                   </div>
                   <button onClick={resetCookie} style={{ width: '100%', background: '#f59e0b', color: 'white', padding: '14px', borderRadius: '8px', fontWeight: 900, fontSize: '14px', border: 'none', cursor: 'pointer' }}>

@@ -1,92 +1,106 @@
-// Auto-generated IDL type
+// Anchor 0.32 format IDL
 export const IDL = {
   "address": "DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85",
-  "version": "0.1.0",
-  "name": "fortune_cookie",
+  "metadata": {
+    "name": "fortune_cookie",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
   "instructions": [
     {
       "name": "initialize_stats",
+      "discriminator": [144, 201, 117, 76, 127, 118, 176, 16],
       "accounts": [
-        {
-          "name": "payer",
-          "isMut": true,
-          "isSigner": true
-        },
+        { "name": "payer", "writable": true, "signer": true },
         {
           "name": "stats",
-          "isMut": true,
-          "isSigner": false
+          "writable": true,
+          "pda": {
+            "seeds": [{ "kind": "const", "value": [115, 116, 97, 116, 115] }]
+          }
         },
-        {
-          "name": "system_program",
-          "isMut": false,
-          "isSigner": false
-        }
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
       ],
       "args": []
     },
     {
       "name": "open_cookie",
+      "discriminator": [188, 59, 235, 4, 180, 150, 85, 111],
       "accounts": [
-        {
-          "name": "user",
-          "isMut": true,
-          "isSigner": true
-        },
+        { "name": "user", "writable": true, "signer": true },
         {
           "name": "cookie",
-          "isMut": true,
-          "isSigner": false
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "account", "path": "user" },
+              { "kind": "const", "value": [99, 111, 111, 107, 105, 101] },
+              { "kind": "arg", "path": "counter" }
+            ]
+          }
         },
         {
           "name": "stats",
-          "isMut": true,
-          "isSigner": false
+          "writable": true,
+          "pda": {
+            "seeds": [{ "kind": "const", "value": [115, 116, 97, 116, 115] }]
+          }
         },
-        {
-          "name": "system_program",
-          "isMut": false,
-          "isSigner": false
-        }
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
       ],
       "args": [
-        {
-          "name": "archetype",
-          "type": "u8"
-        },
-        {
-          "name": "counter",
-          "type": "u64"
-        }
+        { "name": "archetype", "type": "u8" },
+        { "name": "counter", "type": "u64" }
       ]
     }
   ],
   "accounts": [
     {
       "name": "FortuneCookie",
+      "discriminator": [168, 18, 136, 29, 157, 85, 6, 177]
+    },
+    {
+      "name": "Stats",
+      "discriminator": [190, 125, 51, 63, 169, 197, 36, 238]
+    }
+  ],
+  "events": [
+    {
+      "name": "CookieOpened",
+      "discriminator": [137, 39, 90, 246, 59, 233, 68, 238]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidArchetype",
+      "msg": "Invalid archetype (must be 0-3)"
+    }
+  ],
+  "types": [
+    {
+      "name": "CookieOpened",
       "type": {
         "kind": "struct",
         "fields": [
-          {
-            "name": "user",
-            "type": "publicKey"
-          },
-          {
-            "name": "archetype",
-            "type": "u8"
-          },
-          {
-            "name": "fortune_id",
-            "type": "u64"
-          },
-          {
-            "name": "rarity",
-            "type": "u8"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
-          }
+          { "name": "user", "type": "pubkey" },
+          { "name": "archetype", "type": "u8" },
+          { "name": "fortune_id", "type": "u64" },
+          { "name": "rarity", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "FortuneCookie",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "user", "type": "pubkey" },
+          { "name": "archetype", "type": "u8" },
+          { "name": "fortune_id", "type": "u64" },
+          { "name": "rarity", "type": "u8" },
+          { "name": "bump", "type": "u8" }
         ]
       }
     },
@@ -95,43 +109,10 @@ export const IDL = {
       "type": {
         "kind": "struct",
         "fields": [
-          {
-            "name": "total_opens",
-            "type": "u64"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
-          }
+          { "name": "total_opens", "type": "u64" },
+          { "name": "bump", "type": "u8" }
         ]
       }
-    }
-  ],
-  "events": [
-    {
-      "name": "CookieOpened",
-      "fields": [
-        {
-          "name": "user",
-          "type": "publicKey",
-          "index": false
-        },
-        {
-          "name": "archetype",
-          "type": "u8",
-          "index": false
-        },
-        {
-          "name": "fortune_id",
-          "type": "u64",
-          "index": false
-        },
-        {
-          "name": "rarity",
-          "type": "u8",
-          "index": false
-        }
-      ]
     }
   ]
 } as const;
