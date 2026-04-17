@@ -1,13 +1,13 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { PublicKey, SystemProgram, Keypair } from '@solana/web3.js';
+import { PublicKey, SystemProgram, Keypair, Transaction } from '@solana/web3.js';
 import * as anchor from '@coral-xyz/anchor';
 import { IDL } from './fortune_cookie_idl';
 import { useWalletMode } from '@/components/WalletModeSelector';
-import { getOrCreateSessionKeypair, fundSessionWallet, getSessionBalance, autoFundSessionIfNeeded, MIN_BALANCE_SOL, FUND_AMOUNT_SOL } from '@/lib/session-wallet';
+import { getOrCreateSessionKeypair, getSessionBalance, autoFundSessionIfNeeded, MIN_BALANCE_SOL } from '@/lib/session-wallet';
 
 const PROGRAM_ID = new PublicKey('DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85');
-const BLOCKHASH_TTL_MS = 30_000; // refresh blockhash every 30s
+const BLOCKHASH_TTL_MS = 30_000;
 
 interface BlockhashCache {
   blockhash: string;
@@ -36,6 +36,7 @@ export function useFortuneCookie(): FortuneCookieHook {
 
   const blockhashCacheRef = useRef<BlockhashCache | null>(null);
   const statsInitializedRef = useRef<boolean>(false);
+  const airdropAttemptedRef = useRef(false);
 
   // Load session keypair on mount
   useEffect(() => {
@@ -43,13 +44,14 @@ export function useFortuneCookie(): FortuneCookieHook {
     setSessionKeypair(kp);
   }, []);
 
-  // Once we have both keypair and connection, check balance + auto-airdrop if needed
+  // Once connection is ready, fetch balance and auto-airdrop if needed (devnet only)
   useEffect(() => {
     if (!sessionKeypair) return;
     const init = async () => {
       const bal = await getSessionBalance(connection, sessionKeypair.publicKey);
       setSessionBalance(bal);
-      if (bal < MIN_BALANCE_SOL) {
+      if (bal < MIN_BALANCE_SOL && !airdropAttemptedRef.current) {
+        airdropAttemptedRef.current = true;
         const funded = await autoFundSessionIfNeeded(connection, sessionKeypair.publicKey);
         if (funded) {
           const newBal = await getSessionBalance(connection, sessionKeypair.publicKey);
@@ -60,17 +62,15 @@ export function useFortuneCookie(): FortuneCookieHook {
     init().catch(() => {});
   }, [sessionKeypair, connection]);
 
-  // Poll session balance
+  // Poll session balance every 15s
   useEffect(() => {
     if (!sessionKeypair) return;
-    const refresh = async () => {
+    const id = setInterval(async () => {
       try {
         const bal = await getSessionBalance(connection, sessionKeypair.publicKey);
         setSessionBalance(bal);
       } catch {}
-    };
-    refresh();
-    const id = setInterval(refresh, 15_000);
+    }, 15_000);
     return () => clearInterval(id);
   }, [sessionKeypair, connection]);
 
@@ -86,7 +86,7 @@ export function useFortuneCookie(): FortuneCookieHook {
     return cache;
   }, [connection]);
 
-  // Warm up blockhash cache when connected
+  // Warm blockhash cache
   useEffect(() => {
     getFreshBlockhash().catch(() => {});
     const id = setInterval(() => getFreshBlockhash().catch(() => {}), BLOCKHASH_TTL_MS - 2000);
@@ -95,31 +95,32 @@ export function useFortuneCookie(): FortuneCookieHook {
 
   const needsFunding = sessionBalance < MIN_BALANCE_SOL;
 
+  // Manual top-up from connected wallet (one-time, requires one Solflare approval)
   const fundSession = useCallback(async () => {
     if (!sessionKeypair || !publicKey || !signTransaction) return;
     setIsLoading(true);
     setError(null);
     try {
-      await fundSessionWallet(connection, sessionKeypair.publicKey, signTransaction, publicKey);
+      const { Transaction: Tx, SystemProgram: SP, LAMPORTS_PER_SOL } = await import('@solana/web3.js');
+      const tx = new Tx().add(SP.transfer({
+        fromPubkey: publicKey,
+        toPubkey: sessionKeypair.publicKey,
+        lamports: 0.05 * LAMPORTS_PER_SOL,
+      }));
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
+      const signed = await signTransaction(tx);
+      const sig = await connection.sendRawTransaction(signed.serialize());
+      await connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: sig });
       const bal = await getSessionBalance(connection, sessionKeypair.publicKey);
       setSessionBalance(bal);
     } catch (err: any) {
       setError(err?.message || 'Funding failed');
-      throw err;
     } finally {
       setIsLoading(false);
     }
   }, [sessionKeypair, publicKey, signTransaction, connection]);
-
-  const buildProgram = useCallback((signerKeypair: Keypair) => {
-    const wallet = {
-      publicKey: signerKeypair.publicKey,
-      signTransaction: async (tx: any) => { tx.partialSign(signerKeypair); return tx; },
-      signAllTransactions: async (txs: any[]) => { txs.forEach(tx => tx.partialSign(signerKeypair)); return txs; },
-    };
-    const provider = new anchor.AnchorProvider(connection, wallet as any, { commitment: 'processed' });
-    return new anchor.Program(IDL as any, provider);
-  }, [connection]);
 
   const recordFortune = useCallback(
     async (archetype: number): Promise<string> => {
@@ -127,197 +128,106 @@ export function useFortuneCookie(): FortuneCookieHook {
       setError(null);
 
       try {
-        // Pick signer: session key (no popup) > local wallet > Solflare
-        let signerKeypair: Keypair | null = null;
-        let userPubkey: PublicKey;
+        // ── Determine signer ─────────────────────────────────────────────
+        // 1. Session keypair  — instant, no popup (funded burner in localStorage)
+        // 2. Local dev wallet — instant, no popup (mock keypair)
+        // 3. Solflare         — popup (last resort)
 
-        // Always fetch live balance — React state can be stale on first click
-        let liveSessionBalance = sessionBalance;
+        // Always read live balance — React state can lag on first click
+        let liveBalance = sessionBalance;
         if (sessionKeypair) {
           try {
-            liveSessionBalance = await getSessionBalance(connection, sessionKeypair.publicKey);
-            setSessionBalance(liveSessionBalance);
+            liveBalance = await getSessionBalance(connection, sessionKeypair.publicKey);
+            setSessionBalance(liveBalance);
           } catch {}
         }
 
-        const useSession = sessionKeypair && liveSessionBalance >= MIN_BALANCE_SOL;
+        let signerType: 'session' | 'local' | 'solflare';
+        let userPubkey: PublicKey;
 
-        if (useSession && sessionKeypair) {
-          signerKeypair = sessionKeypair;
+        if (sessionKeypair && liveBalance >= MIN_BALANCE_SOL) {
+          signerType = 'session';
           userPubkey = sessionKeypair.publicKey;
         } else if (mode === 'local' && localWallet) {
-          // local dev wallet
+          signerType = 'local';
           userPubkey = localWallet.publicKey;
         } else if (connected && publicKey) {
-          // Solflare — will show popup
+          signerType = 'solflare';
           userPubkey = publicKey;
         } else {
           throw new Error('No wallet connected');
         }
 
+        // ── PDAs ─────────────────────────────────────────────────────────
         const counterSeed = Math.floor(Date.now() / 1000);
-
-        const [statsAccount] = PublicKey.findProgramAddressSync(
-          [Buffer.from('stats')],
-          PROGRAM_ID
-        );
+        const [statsAccount] = PublicKey.findProgramAddressSync([Buffer.from('stats')], PROGRAM_ID);
         const [cookieAccount] = PublicKey.findProgramAddressSync(
-          [
-            userPubkey.toBuffer(),
-            Buffer.from('cookie'),
-            new anchor.BN(counterSeed).toArrayLike(Buffer, 'le', 8),
-          ],
+          [userPubkey.toBuffer(), Buffer.from('cookie'), new anchor.BN(counterSeed).toArrayLike(Buffer, 'le', 8)],
           PROGRAM_ID
         );
-
-        // Get blockhash from cache (fast)
         const { blockhash, lastValidBlockHeight } = await getFreshBlockhash();
 
-        if (signerKeypair) {
-          // --- Session key path: instant, no popup ---
-          const program = buildProgram(signerKeypair);
-
-          // Init stats once, cache the result
-          if (!statsInitializedRef.current) {
-            const info = await connection.getAccountInfo(statsAccount);
-            if (!info) {
-              try {
-                const initTx = await program.methods
-                  .initializeStats()
-                  .accounts({ payer: userPubkey, stats: statsAccount, systemProgram: SystemProgram.programId })
-                  .transaction();
-                const bh = await getFreshBlockhash();
-                initTx.feePayer = userPubkey;
-                initTx.recentBlockhash = bh.blockhash;
-                initTx.partialSign(signerKeypair);
-                await connection.sendRawTransaction(initTx.serialize(), { skipPreflight: true });
-                await new Promise(r => setTimeout(r, 1500));
-              } catch {}
-            }
-            statsInitializedRef.current = true;
-          }
-
-          const tx = await program.methods
-            .openCookie(new anchor.BN(archetype), new anchor.BN(counterSeed))
-            .accounts({ user: userPubkey, cookie: cookieAccount, stats: statsAccount, systemProgram: SystemProgram.programId })
-            .transaction();
-
+        // ── Signer helper ─────────────────────────────────────────────────
+        const signTx = async (tx: Transaction): Promise<Transaction> => {
           tx.feePayer = userPubkey;
           tx.recentBlockhash = blockhash;
-          tx.partialSign(signerKeypair);
+          if (signerType === 'session' && sessionKeypair) {
+            tx.partialSign(sessionKeypair);
+            return tx;
+          }
+          if (signerType === 'local' && localWallet) return localWallet.signTransaction(tx);
+          if (signerType === 'solflare' && signTransaction) return signTransaction(tx);
+          throw new Error('No signer available');
+        };
 
-          const txSig = await connection.sendRawTransaction(tx.serialize(), {
-            skipPreflight: true,   // skip simulation for speed
-            maxRetries: 3,
-          });
+        // ── Anchor provider (uses our signTx so no wallet popup from Anchor) ──
+        const dummyWallet = {
+          publicKey: userPubkey,
+          signTransaction: signTx,
+          signAllTransactions: async (txs: Transaction[]) => Promise.all(txs.map(signTx)),
+        };
+        const provider = new anchor.AnchorProvider(connection, dummyWallet as any, { commitment: 'processed' });
+        const program = new anchor.Program(IDL as any, provider);
 
-          console.log('⚡ Session TX sent:', txSig);
+        // ── Init stats account once ──────────────────────────────────────
+        if (!statsInitializedRef.current) {
+          const info = await connection.getAccountInfo(statsAccount);
+          if (!info) {
+            try {
+              const initTx = await program.methods
+                .initializeStats()
+                .accounts({ payer: userPubkey, stats: statsAccount, systemProgram: SystemProgram.programId })
+                .transaction();
+              const signedInit = await signTx(initTx);
+              await connection.sendRawTransaction(signedInit.serialize(), { skipPreflight: true });
+              await new Promise(r => setTimeout(r, 1500));
+            } catch {}
+          }
+          statsInitializedRef.current = true;
+        }
 
-          // Optimistic: confirm at 'processed' (~400ms) not 'confirmed' (10-30s)
-          connection.confirmTransaction(
-            { blockhash, lastValidBlockHeight, signature: txSig },
-            'processed'
-          ).then(res => {
-            if (res.value.err) console.warn('TX finalization error:', res.value.err);
+        // ── Build + sign + send ──────────────────────────────────────────
+        const tx = await program.methods
+          .openCookie(new anchor.BN(archetype), new anchor.BN(counterSeed))
+          .accounts({ user: userPubkey, cookie: cookieAccount, stats: statsAccount, systemProgram: SystemProgram.programId })
+          .transaction();
+
+        const signedTx = await signTx(tx);
+        const txSig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 3 });
+
+        console.log(`⚡ [${signerType}] TX:`, txSig);
+
+        connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: txSig }, 'processed')
+          .then(res => {
+            if (res.value.err) console.warn('TX error:', res.value.err);
             else console.log('✅ Confirmed:', txSig);
           });
 
-          // Refresh session balance in background
-          getSessionBalance(connection, signerKeypair.publicKey)
-            .then(setSessionBalance)
-            .catch(() => {});
-
-          return txSig;
-
-        } else if (mode === 'local' && localWallet) {
-          // --- Local wallet path ---
-          const wallet = {
-            publicKey: localWallet.publicKey,
-            signTransaction: (tx: any) => localWallet.signTransaction(tx),
-            signAllTransactions: (txs: any) => localWallet.signAllTransactions(txs),
-          };
-          const provider = new anchor.AnchorProvider(connection, wallet as any, { commitment: 'processed' });
-          const program = new anchor.Program(IDL as any, provider);
-
-          if (!statsInitializedRef.current) {
-            const info = await connection.getAccountInfo(statsAccount);
-            if (!info) {
-              try {
-                const initTx = await program.methods
-                  .initializeStats()
-                  .accounts({ payer: userPubkey, stats: statsAccount, systemProgram: SystemProgram.programId })
-                  .transaction();
-                initTx.feePayer = userPubkey;
-                initTx.recentBlockhash = blockhash;
-                const signed = await localWallet.signTransaction(initTx);
-                await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
-                await new Promise(r => setTimeout(r, 1500));
-              } catch {}
-            }
-            statsInitializedRef.current = true;
-          }
-
-          const tx = await program.methods
-            .openCookie(new anchor.BN(archetype), new anchor.BN(counterSeed))
-            .accounts({ user: userPubkey, cookie: cookieAccount, stats: statsAccount, systemProgram: SystemProgram.programId })
-            .transaction();
-
-          tx.feePayer = userPubkey;
-          tx.recentBlockhash = blockhash;
-          const signed = await localWallet.signTransaction(tx);
-          const txSig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true, maxRetries: 3 });
-          console.log('⚡ Local TX sent:', txSig);
-
-          connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: txSig }, 'processed')
-            .then(res => { if (res.value.err) console.warn('TX error:', res.value.err); });
-
-          return txSig;
-
-        } else {
-          // --- Solflare path (popup) — fallback when session not funded ---
-          if (!signTransaction || !sendTransaction || !publicKey) throw new Error('Wallet not connected');
-
-          const provider = new anchor.AnchorProvider(
-            connection,
-            { publicKey, signTransaction, signAllTransactions: async (txs: any[]) => { const r=[]; for(const t of txs) r.push(await signTransaction(t)); return r; } } as any,
-            { commitment: 'processed' }
-          );
-          const program = new anchor.Program(IDL as any, provider);
-
-          if (!statsInitializedRef.current) {
-            const info = await connection.getAccountInfo(statsAccount);
-            if (!info) {
-              try {
-                const initTx = await program.methods
-                  .initializeStats()
-                  .accounts({ payer: publicKey, stats: statsAccount, systemProgram: SystemProgram.programId })
-                  .transaction();
-                initTx.feePayer = publicKey;
-                initTx.recentBlockhash = blockhash;
-                const signed = await signTransaction(initTx);
-                await sendTransaction(signed, connection);
-                await new Promise(r => setTimeout(r, 1500));
-              } catch {}
-            }
-            statsInitializedRef.current = true;
-          }
-
-          const tx = await program.methods
-            .openCookie(new anchor.BN(archetype), new anchor.BN(counterSeed))
-            .accounts({ user: publicKey, cookie: cookieAccount, stats: statsAccount, systemProgram: SystemProgram.programId })
-            .transaction();
-
-          tx.feePayer = publicKey;
-          tx.recentBlockhash = blockhash;
-          const signed = await signTransaction(tx);
-          const txSig = await sendTransaction(signed, connection);
-          console.log('⚡ Solflare TX sent:', txSig);
-
-          connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: txSig }, 'processed')
-            .then(res => { if (res.value.err) console.warn('TX error:', res.value.err); });
-
-          return txSig;
+        if (signerType === 'session' && sessionKeypair) {
+          getSessionBalance(connection, sessionKeypair.publicKey).then(setSessionBalance).catch(() => {});
         }
+
+        return txSig;
 
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -328,7 +238,8 @@ export function useFortuneCookie(): FortuneCookieHook {
         setIsLoading(false);
       }
     },
-    [connection, publicKey, signTransaction, sendTransaction, mode, localWallet, sessionKeypair, sessionBalance, getFreshBlockhash, buildProgram]
+    [connection, publicKey, signTransaction, sendTransaction, mode, localWallet,
+     sessionKeypair, sessionBalance, getFreshBlockhash, connected]
   );
 
   return {
