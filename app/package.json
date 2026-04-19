@@ -7,7 +7,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
@@ -21,6 +23,13 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
+  "optionalDependencies": {
+    "@magicblock-labs/gum-react-sdk": "*",
+    "@dynamic-labs/sdk-react-core": "*",
+    "@dynamic-labs/solana": "*",
+    "@dynamic-labs/wallet-connector-core": "*",
+    "@switchboard-xyz/on-demand": "*"
+  },
   "overrides": {
     "@solana/wallet-adapter-react": "0.15.39"
   },
@@ -28,6 +37,7 @@
     "@types/node": "^20.12.12",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
+    "@playwright/test": "^1.44.0",
     "eslint": "8.57.0",
     "eslint-config-next": "14.2.5",
     "solana-bankrun": "^0.4.0",

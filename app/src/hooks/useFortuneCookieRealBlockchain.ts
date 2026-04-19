@@ -4,10 +4,18 @@ import { PublicKey, SystemProgram, Keypair, Transaction } from '@solana/web3.js'
 import * as anchor from '@coral-xyz/anchor';
 import { IDL } from './fortune_cookie_idl';
 import { useWalletMode } from '@/components/WalletModeSelector';
-import { getOrCreateSessionKeypair, getSessionBalance, autoFundSessionIfNeeded, MIN_BALANCE_SOL } from '@/lib/session-wallet';
+import {
+  getOrCreateSessionKeypair,
+  getStatsShard,
+  getSessionTokenPda,
+  ensureSession,
+} from '@/lib/sessionKeyProvider';
+import { getSessionBalance, autoFundSessionIfNeeded } from '@/lib/session-wallet';
 
-const PROGRAM_ID = new PublicKey('DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85');
+const PROGRAM_ID   = new PublicKey('DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85');
+const SLOT_HASHES  = new PublicKey('SysvarS1otHashes111111111111111111111111111');
 const BLOCKHASH_TTL_MS = 30_000;
+const MIN_BALANCE_SOL  = 0.005;
 
 interface BlockhashCache {
   blockhash: string;
@@ -15,7 +23,7 @@ interface BlockhashCache {
   fetchedAt: number;
 }
 
-interface FortuneCookieHook {
+export interface FortuneCookieHook {
   recordFortune: (archetype: number) => Promise<string>;
   isLoading: boolean;
   error: string | null;
@@ -27,24 +35,23 @@ interface FortuneCookieHook {
 
 export function useFortuneCookie(): FortuneCookieHook {
   const { connection } = useConnection();
-  const { publicKey, signTransaction, sendTransaction, connected } = useWallet();
+  const { publicKey, signTransaction, connected } = useWallet();
   const { mode, localWallet } = useWalletMode();
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const [isLoading,      setIsLoading]      = useState(false);
+  const [error,          setError]          = useState<string | null>(null);
   const [sessionBalance, setSessionBalance] = useState(0);
   const [sessionKeypair, setSessionKeypair] = useState<Keypair | null>(null);
 
-  const blockhashCacheRef = useRef<BlockhashCache | null>(null);
-  const statsInitializedRef = useRef<boolean>(false);
-  const airdropAttemptedRef = useRef(false);
+  const blockhashCacheRef      = useRef<BlockhashCache | null>(null);
+  const shardsInitializedRef   = useRef<Set<number>>(new Set());
+  const airdropAttemptedRef    = useRef(false);
 
-  // Load session keypair on mount
   useEffect(() => {
-    const kp = getOrCreateSessionKeypair();
-    setSessionKeypair(kp);
+    setSessionKeypair(getOrCreateSessionKeypair());
   }, []);
 
-  // Once connection is ready, fetch balance and auto-airdrop if needed (devnet only)
+  // Balance polling + auto-airdrop on devnet
   useEffect(() => {
     if (!sessionKeypair) return;
     const init = async () => {
@@ -54,27 +61,23 @@ export function useFortuneCookie(): FortuneCookieHook {
         airdropAttemptedRef.current = true;
         const funded = await autoFundSessionIfNeeded(connection, sessionKeypair.publicKey);
         if (funded) {
-          const newBal = await getSessionBalance(connection, sessionKeypair.publicKey);
-          setSessionBalance(newBal);
+          setSessionBalance(await getSessionBalance(connection, sessionKeypair.publicKey));
         }
       }
     };
     init().catch(() => {});
   }, [sessionKeypair, connection]);
 
-  // Poll session balance every 15s
   useEffect(() => {
     if (!sessionKeypair) return;
     const id = setInterval(async () => {
       try {
-        const bal = await getSessionBalance(connection, sessionKeypair.publicKey);
-        setSessionBalance(bal);
+        setSessionBalance(await getSessionBalance(connection, sessionKeypair.publicKey));
       } catch {}
     }, 15_000);
     return () => clearInterval(id);
   }, [sessionKeypair, connection]);
 
-  // Pre-fetch and cache blockhash
   const getFreshBlockhash = useCallback(async (): Promise<BlockhashCache> => {
     const now = Date.now();
     if (blockhashCacheRef.current && now - blockhashCacheRef.current.fetchedAt < BLOCKHASH_TTL_MS) {
@@ -86,7 +89,6 @@ export function useFortuneCookie(): FortuneCookieHook {
     return cache;
   }, [connection]);
 
-  // Warm blockhash cache
   useEffect(() => {
     getFreshBlockhash().catch(() => {});
     const id = setInterval(() => getFreshBlockhash().catch(() => {}), BLOCKHASH_TTL_MS - 2000);
@@ -95,26 +97,26 @@ export function useFortuneCookie(): FortuneCookieHook {
 
   const needsFunding = sessionBalance < MIN_BALANCE_SOL;
 
-  // Manual top-up from connected wallet (one-time, requires one Solflare approval)
   const fundSession = useCallback(async () => {
     if (!sessionKeypair || !publicKey || !signTransaction) return;
     setIsLoading(true);
     setError(null);
     try {
-      const { Transaction: Tx, SystemProgram: SP, LAMPORTS_PER_SOL } = await import('@solana/web3.js');
-      const tx = new Tx().add(SP.transfer({
-        fromPubkey: publicKey,
-        toPubkey: sessionKeypair.publicKey,
-        lamports: 0.05 * LAMPORTS_PER_SOL,
-      }));
+      const { LAMPORTS_PER_SOL } = await import('@solana/web3.js');
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: sessionKeypair.publicKey,
+          lamports: 0.05 * LAMPORTS_PER_SOL,
+        }),
+      );
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
       tx.feePayer = publicKey;
       const signed = await signTransaction(tx);
       const sig = await connection.sendRawTransaction(signed.serialize());
       await connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: sig });
-      const bal = await getSessionBalance(connection, sessionKeypair.publicKey);
-      setSessionBalance(bal);
+      setSessionBalance(await getSessionBalance(connection, sessionKeypair.publicKey));
     } catch (err: any) {
       setError(err?.message || 'Funding failed');
     } finally {
@@ -122,18 +124,43 @@ export function useFortuneCookie(): FortuneCookieHook {
     }
   }, [sessionKeypair, publicKey, signTransaction, connection]);
 
+  // Ensure the stats shard for `userPubkey` is initialized (lazy, cached per session)
+  const ensureStatsShard = useCallback(
+    async (
+      program: anchor.Program<any>,
+      signTx: (tx: Transaction) => Promise<Transaction>,
+      userPubkey: PublicKey,
+    ) => {
+      const { shardId, pda } = getStatsShard(userPubkey);
+      if (shardsInitializedRef.current.has(shardId)) return { shardId, pda };
+
+      const info = await connection.getAccountInfo(pda);
+      if (!info) {
+        try {
+          const tx: Transaction = await program.methods
+            .initializeStatsShard(shardId)
+            .accounts({ payer: userPubkey, shard: pda, systemProgram: SystemProgram.programId })
+            .transaction();
+          const signed = await signTx(tx);
+          await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
+          await new Promise(r => setTimeout(r, 1500));
+        } catch {}
+      }
+      shardsInitializedRef.current.add(shardId);
+      return { shardId, pda };
+    },
+    [connection],
+  );
+
   const recordFortune = useCallback(
     async (archetype: number): Promise<string> => {
       setIsLoading(true);
       setError(null);
 
       try {
-        // ── Determine signer ─────────────────────────────────────────────
-        // 1. Session keypair  — instant, no popup (funded burner in localStorage)
-        // 2. Local dev wallet — instant, no popup (mock keypair)
-        // 3. Solflare         — popup (last resort)
+        // ── Determine signer + authority ────────────────────────────────────
+        // Priority: session keypair (no popup) → local wallet → main wallet
 
-        // Always read live balance — React state can lag on first click
         let liveBalance = sessionBalance;
         if (sessionKeypair) {
           try {
@@ -142,93 +169,129 @@ export function useFortuneCookie(): FortuneCookieHook {
           } catch {}
         }
 
-        let signerType: 'session' | 'local' | 'solflare';
-        let userPubkey: PublicKey;
+        type SignerMode = 'session' | 'local' | 'wallet';
+        let signerMode: SignerMode;
+        let signerPubkey: PublicKey;
+        let authorityPubkey: PublicKey;
 
         if (sessionKeypair && liveBalance >= MIN_BALANCE_SOL) {
-          signerType = 'session';
-          userPubkey = sessionKeypair.publicKey;
+          signerMode      = 'session';
+          signerPubkey    = sessionKeypair.publicKey;
+          // authority = main wallet if connected, else session key itself
+          authorityPubkey = (connected && publicKey) ? publicKey : sessionKeypair.publicKey;
         } else if (mode === 'local' && localWallet) {
-          signerType = 'local';
-          userPubkey = localWallet.publicKey;
+          signerMode      = 'local';
+          signerPubkey    = localWallet.publicKey;
+          authorityPubkey = localWallet.publicKey;
         } else if (connected && publicKey) {
-          signerType = 'solflare';
-          userPubkey = publicKey;
+          signerMode      = 'wallet';
+          signerPubkey    = publicKey;
+          authorityPubkey = publicKey;
         } else {
           throw new Error('No wallet connected');
         }
 
-        // ── PDAs ─────────────────────────────────────────────────────────
-        const counterSeed = Math.floor(Date.now() / 1000);
-        const [statsAccount] = PublicKey.findProgramAddressSync([Buffer.from('stats')], PROGRAM_ID);
-        const [cookieAccount] = PublicKey.findProgramAddressSync(
-          [userPubkey.toBuffer(), Buffer.from('cookie'), new anchor.BN(counterSeed).toArrayLike(Buffer, 'le', 8)],
-          PROGRAM_ID
-        );
-        const { blockhash, lastValidBlockHeight } = await getFreshBlockhash();
-
-        // ── Signer helper ─────────────────────────────────────────────────
+        // ── Sign helper ─────────────────────────────────────────────────────
         const signTx = async (tx: Transaction): Promise<Transaction> => {
-          tx.feePayer = userPubkey;
-          tx.recentBlockhash = blockhash;
-          if (signerType === 'session' && sessionKeypair) {
+          tx.feePayer = signerPubkey;
+          const { blockhash } = await getFreshBlockhash();
+          tx.recentBlockhash = tx.recentBlockhash ?? blockhash;
+
+          if (signerMode === 'session' && sessionKeypair) {
             tx.partialSign(sessionKeypair);
             return tx;
           }
-          if (signerType === 'local' && localWallet) return localWallet.signTransaction(tx);
-          if (signerType === 'solflare' && signTransaction) return signTransaction(tx);
-          throw new Error('No signer available');
+          if (signerMode === 'local' && localWallet) return localWallet.signTransaction(tx);
+          if (signerMode === 'wallet' && signTransaction) return signTransaction(tx);
+          throw new Error('No signer');
         };
 
-        // ── Anchor provider (uses our signTx so no wallet popup from Anchor) ──
+        // ── Anchor program ──────────────────────────────────────────────────
         const dummyWallet = {
-          publicKey: userPubkey,
+          publicKey: signerPubkey,
           signTransaction: signTx,
           signAllTransactions: async (txs: Transaction[]) => Promise.all(txs.map(signTx)),
         };
-        const provider = new anchor.AnchorProvider(connection, dummyWallet as any, { commitment: 'processed' });
+        const provider = new anchor.AnchorProvider(connection, dummyWallet as any, {
+          commitment: 'processed',
+        });
         const program = new anchor.Program(IDL as any, provider);
 
-        // ── Init stats account once ──────────────────────────────────────
-        if (!statsInitializedRef.current) {
-          const info = await connection.getAccountInfo(statsAccount);
-          if (!info) {
-            try {
-              const initTx = await program.methods
-                .initializeStats()
-                .accounts({ payer: userPubkey, stats: statsAccount, systemProgram: SystemProgram.programId })
-                .transaction();
-              const signedInit = await signTx(initTx);
-              await connection.sendRawTransaction(signedInit.serialize(), { skipPreflight: true });
-              await new Promise(r => setTimeout(r, 1500));
-            } catch {}
+        // ── Session token (for session mode with a connected main wallet) ───
+        let sessionTokenPda: PublicKey | null = null;
+        if (signerMode === 'session' && connected && publicKey && signTransaction) {
+          try {
+            sessionTokenPda = await ensureSession(
+              connection,
+              program,
+              publicKey,
+              signTransaction,
+              sessionKeypair!.publicKey,
+            );
+          } catch {
+            // Fall through without session token: cookie owned by session key
           }
-          statsInitializedRef.current = true;
         }
 
-        // ── Build + sign + send ──────────────────────────────────────────
-        const tx = await program.methods
-          .openCookie(new anchor.BN(archetype), new anchor.BN(counterSeed))
-          .accounts({ user: userPubkey, cookie: cookieAccount, stats: statsAccount, systemProgram: SystemProgram.programId })
+        // ── Ensure shard is initialized ─────────────────────────────────────
+        const { shardId, pda: statsShard } = await ensureStatsShard(
+          program,
+          signTx,
+          authorityPubkey,
+        );
+
+        // ── PDAs ────────────────────────────────────────────────────────────
+        const counterSeed = Math.floor(Date.now() / 1000);
+        const [cookiePda] = PublicKey.findProgramAddressSync(
+          [
+            authorityPubkey.toBuffer(),
+            Buffer.from('cookie'),
+            new anchor.BN(counterSeed).toArrayLike(Buffer, 'le', 8),
+          ],
+          PROGRAM_ID,
+        );
+
+        const { blockhash, lastValidBlockHeight } = await getFreshBlockhash();
+
+        // ── Build + sign + send ─────────────────────────────────────────────
+        const tx: Transaction = await program.methods
+          .openCookie(new anchor.BN(archetype), new anchor.BN(counterSeed), shardId)
+          .accounts({
+            signer:       signerPubkey,
+            authority:    authorityPubkey,
+            cookie:       cookiePda,
+            statsShard,
+            sessionToken: sessionTokenPda ?? null,
+            slotHashes:   SLOT_HASHES,
+            systemProgram: SystemProgram.programId,
+          })
           .transaction();
 
+        tx.recentBlockhash = blockhash;
+        tx.feePayer = signerPubkey;
+
         const signedTx = await signTx(tx);
-        const txSig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 3 });
+        const txSig = await connection.sendRawTransaction(signedTx.serialize(), {
+          skipPreflight: true,
+          maxRetries: 3,
+        });
 
-        console.log(`⚡ [${signerType}] TX:`, txSig);
+        console.log(`⚡ [${signerMode}] TX:`, txSig);
 
-        connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: txSig }, 'processed')
+        connection
+          .confirmTransaction({ blockhash, lastValidBlockHeight, signature: txSig }, 'processed')
           .then(res => {
             if (res.value.err) console.warn('TX error:', res.value.err);
             else console.log('✅ Confirmed:', txSig);
           });
 
-        if (signerType === 'session' && sessionKeypair) {
-          getSessionBalance(connection, sessionKeypair.publicKey).then(setSessionBalance).catch(() => {});
+        if (signerMode === 'session' && sessionKeypair) {
+          getSessionBalance(connection, sessionKeypair.publicKey)
+            .then(setSessionBalance)
+            .catch(() => {});
         }
 
         return txSig;
-
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
         setError(msg);
@@ -238,8 +301,11 @@ export function useFortuneCookie(): FortuneCookieHook {
         setIsLoading(false);
       }
     },
-    [connection, publicKey, signTransaction, sendTransaction, mode, localWallet,
-     sessionKeypair, sessionBalance, getFreshBlockhash, connected]
+    [
+      connection, publicKey, signTransaction, mode, localWallet,
+      sessionKeypair, sessionBalance, getFreshBlockhash,
+      connected, ensureStatsShard,
+    ],
   );
 
   return {

@@ -11,6 +11,7 @@ import {
   SolflareWalletAdapter,
 } from "@solana/wallet-adapter-wallets";
 import { WalletModeProvider } from "@/components/WalletModeSelector";
+import DynamicWalletProvider from "@/components/DynamicWalletProvider";
 
 export default function Providers({
   children
@@ -35,14 +36,16 @@ export default function Providers({
   );
 
   return (
-    <ConnectionProvider endpoint={endpoint}>
-      <WalletProvider wallets={wallets} autoConnect={false}>
-        <WalletModalProvider>
-          <WalletModeProvider>
-            {children}
-          </WalletModeProvider>
-        </WalletModalProvider>
-      </WalletProvider>
-    </ConnectionProvider>
+    <DynamicWalletProvider>
+      <ConnectionProvider endpoint={endpoint}>
+        <WalletProvider wallets={wallets} autoConnect={false}>
+          <WalletModalProvider>
+            <WalletModeProvider>
+              {children}
+            </WalletModeProvider>
+          </WalletModalProvider>
+        </WalletProvider>
+      </ConnectionProvider>
+    </DynamicWalletProvider>
   );
 }
