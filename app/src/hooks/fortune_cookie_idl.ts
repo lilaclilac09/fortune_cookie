@@ -1,4 +1,6 @@
-// Anchor 0.32 format IDL
+// Auto-generated from target/idl/fortune_cookie.json — do not edit manually.
+// Regenerate: cp target/idl/fortune_cookie.json app/src/hooks/fortune_cookie_idl.json
+//             then update this file to match.
 export const IDL = {
   "address": "DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85",
   "metadata": {
@@ -9,74 +11,114 @@ export const IDL = {
   },
   "instructions": [
     {
-      "name": "initialize_stats",
-      "discriminator": [144, 201, 117, 76, 127, 118, 176, 16],
+      "name": "create_session",
+      "docs": ["Main wallet signs once to authorize a session keypair for `valid_until` (unix ts)."],
+      "discriminator": [242, 193, 143, 179, 150, 25, 122, 227],
       "accounts": [
-        { "name": "payer", "writable": true, "signer": true },
+        { "name": "authority", "writable": true, "signer": true },
+        { "name": "session_signer" },
         {
-          "name": "stats",
+          "name": "session_token",
           "writable": true,
           "pda": {
-            "seeds": [{ "kind": "const", "value": [115, 116, 97, 116, 115] }]
+            "seeds": [
+              { "kind": "account", "path": "authority" },
+              { "kind": "account", "path": "session_signer" },
+              { "kind": "const", "value": [115, 101, 115, 115, 105, 111, 110] }
+            ]
           }
         },
         { "name": "system_program", "address": "11111111111111111111111111111111" }
       ],
-      "args": []
+      "args": [{ "name": "valid_until", "type": "i64" }]
+    },
+    {
+      "name": "initialize_stats_shard",
+      "docs": ["One-time init per shard (call 64 times, shard_id 0..63)."],
+      "discriminator": [20, 252, 212, 116, 206, 190, 234, 236],
+      "accounts": [
+        { "name": "payer", "writable": true, "signer": true },
+        { "name": "shard", "writable": true },
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
+      ],
+      "args": [{ "name": "shard_id", "type": "u8" }]
     },
     {
       "name": "open_cookie",
       "discriminator": [188, 59, 235, 4, 180, 150, 85, 111],
       "accounts": [
-        { "name": "user", "writable": true, "signer": true },
+        {
+          "name": "signer",
+          "docs": ["Fee payer — authority directly, or a funded session keypair."],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "authority",
+          "docs": ["Real owner of the cookie. In direct mode equals signer.", "In session mode equals session_token.authority."]
+        },
         {
           "name": "cookie",
           "writable": true,
           "pda": {
             "seeds": [
-              { "kind": "account", "path": "user" },
+              { "kind": "account", "path": "authority" },
               { "kind": "const", "value": [99, 111, 111, 107, 105, 101] },
               { "kind": "arg", "path": "counter" }
             ]
           }
         },
+        { "name": "stats_shard", "writable": true },
         {
-          "name": "stats",
-          "writable": true,
-          "pda": {
-            "seeds": [{ "kind": "const", "value": [115, 116, 97, 116, 115] }]
-          }
+          "name": "session_token",
+          "docs": ["Present in session-key mode; None for direct-wallet mode."],
+          "optional": true
         },
+        { "name": "slot_hashes", "address": "SysvarS1otHashes111111111111111111111111111" },
         { "name": "system_program", "address": "11111111111111111111111111111111" }
       ],
       "args": [
         { "name": "archetype", "type": "u8" },
-        { "name": "counter", "type": "u64" }
+        { "name": "counter", "type": "u64" },
+        { "name": "shard_id", "type": "u8" }
       ]
+    },
+    {
+      "name": "revoke_session",
+      "docs": ["Authority closes the session token and reclaims rent."],
+      "discriminator": [86, 92, 198, 120, 144, 2, 7, 194],
+      "accounts": [
+        { "name": "authority", "writable": true, "signer": true },
+        {
+          "name": "session_token",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "account", "path": "authority" },
+              { "kind": "account", "path": "session_token.session_signer", "account": "SessionToken" },
+              { "kind": "const", "value": [115, 101, 115, 115, 105, 111, 110] }
+            ]
+          }
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
-    {
-      "name": "FortuneCookie",
-      "discriminator": [168, 18, 136, 29, 157, 85, 6, 177]
-    },
-    {
-      "name": "Stats",
-      "discriminator": [190, 125, 51, 63, 169, 197, 36, 238]
-    }
+    { "name": "FortuneCookie", "discriminator": [168, 18, 136, 29, 157, 85, 6, 177] },
+    { "name": "SessionToken", "discriminator": [233, 4, 115, 14, 46, 21, 1, 15] },
+    { "name": "StatsShard", "discriminator": [142, 95, 14, 158, 108, 216, 224, 249] }
   ],
   "events": [
-    {
-      "name": "CookieOpened",
-      "discriminator": [137, 39, 90, 246, 59, 233, 68, 238]
-    }
+    { "name": "CookieOpened", "discriminator": [137, 39, 90, 246, 59, 233, 68, 238] }
   ],
   "errors": [
-    {
-      "code": 6000,
-      "name": "InvalidArchetype",
-      "msg": "Invalid archetype (must be 0-3)"
-    }
+    { "code": 6000, "name": "InvalidArchetype", "msg": "Invalid archetype (must be 0-3)" },
+    { "code": 6001, "name": "InvalidShard", "msg": "Invalid shard ID (must be 0-63)" },
+    { "code": 6002, "name": "SessionExpired", "msg": "Session token has expired" },
+    { "code": 6003, "name": "InvalidSession", "msg": "Invalid session: signer or authority mismatch" },
+    { "code": 6004, "name": "RandomnessNotSettled", "msg": "VRF randomness not yet settled — retry after one slot" },
+    { "code": 6005, "name": "RandomnessTooStale", "msg": "VRF randomness account is stale (> 150 slots old)" }
   ],
   "types": [
     {
@@ -105,11 +147,24 @@ export const IDL = {
       }
     },
     {
-      "name": "Stats",
+      "name": "SessionToken",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "authority", "type": "pubkey" },
+          { "name": "session_signer", "type": "pubkey" },
+          { "name": "valid_until", "type": "i64" },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "StatsShard",
       "type": {
         "kind": "struct",
         "fields": [
           { "name": "total_opens", "type": "u64" },
+          { "name": "shard_id", "type": "u8" },
           { "name": "bump", "type": "u8" }
         ]
       }

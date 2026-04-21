@@ -137,7 +137,8 @@ export function useFortuneCookie(): FortuneCookieHook {
       const info = await connection.getAccountInfo(pda);
       if (!info) {
         try {
-          const tx: Transaction = await program.methods
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const tx: Transaction = await (program.methods as any)
             .initializeStatsShard(shardId)
             .accounts({ payer: userPubkey, shard: pda, systemProgram: SystemProgram.programId })
             .transaction();
@@ -254,14 +255,15 @@ export function useFortuneCookie(): FortuneCookieHook {
         const { blockhash, lastValidBlockHeight } = await getFreshBlockhash();
 
         // ── Build + sign + send ─────────────────────────────────────────────
-        const tx: Transaction = await program.methods
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tx: Transaction = await (program.methods as any)
           .openCookie(new anchor.BN(archetype), new anchor.BN(counterSeed), shardId)
           .accounts({
             signer:       signerPubkey,
             authority:    authorityPubkey,
             cookie:       cookiePda,
             statsShard,
-            sessionToken: sessionTokenPda ?? null,
+            sessionToken: sessionTokenPda ?? undefined,
             slotHashes:   SLOT_HASHES,
             systemProgram: SystemProgram.programId,
           })

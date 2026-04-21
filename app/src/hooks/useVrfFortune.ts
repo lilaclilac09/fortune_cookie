@@ -225,7 +225,8 @@ export function useVrfFortune(): VrfFortuneHook {
           }
 
           if (settled) {
-            const tx: Transaction = await program.methods
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const tx: Transaction = await (program.methods as any)
               .openCookieVrf(
                 new anchor.BN(archetype),
                 new anchor.BN(counterSeed),
@@ -236,7 +237,7 @@ export function useVrfFortune(): VrfFortuneHook {
                 authority:             authorityPubkey,
                 cookie:                cookiePda,
                 statsShard,
-                sessionToken:          null,
+                sessionToken:          undefined,
                 randomnessAccountData: rng.randomnessPda,
                 systemProgram:         SystemProgram.programId,
               })
@@ -268,7 +269,8 @@ export function useVrfFortune(): VrfFortuneHook {
 
         // ── SlotHashes fallback ───────────────────────────────────────────────
         const SLOT_HASHES = new PublicKey("SysvarS1otHashes111111111111111111111111111");
-        const tx: Transaction = await program.methods
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tx: Transaction = await (program.methods as any)
           .openCookie(
             new anchor.BN(archetype),
             new anchor.BN(counterSeed),
@@ -279,7 +281,7 @@ export function useVrfFortune(): VrfFortuneHook {
             authority:     authorityPubkey,
             cookie:        cookiePda,
             statsShard,
-            sessionToken:  null,
+            sessionToken:  undefined,
             slotHashes:    SLOT_HASHES,
             systemProgram: SystemProgram.programId,
           })

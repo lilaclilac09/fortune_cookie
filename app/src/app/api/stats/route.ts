@@ -32,11 +32,11 @@ async function fetchOnChainTotal(): Promise<number> {
   const pdas = Array.from({ length: 64 }, (_, i) => shardPda(i));
 
   // getMultipleAccounts accepts max 100 keys per call — 64 fits in one round-trip
-  const { value: accounts } = await conn.getMultipleAccountsInfo(pdas, {
+  const accounts = await conn.getMultipleAccountsInfo(pdas, {
     commitment: "confirmed",
   });
 
-  return accounts.reduce((sum, info) => {
+  return (accounts ?? []).reduce((sum, info) => {
     if (!info || info.data.length < 16) return sum;
     // StatsShard layout: 8 disc + 8 total_opens (u64 LE)
     const opens = Number(

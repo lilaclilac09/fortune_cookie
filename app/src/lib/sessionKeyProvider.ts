@@ -131,7 +131,8 @@ export async function createSession(
   const until = validUntil ?? Math.floor(Date.now() / 1000) + SESSION_TTL;
   const tokenPda = getSessionTokenPda(authority, sessionSigner);
 
-  const tx: Transaction = await program.methods
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tx: Transaction = await (program.methods as any)
     .createSession(new anchor.BN(until))
     .accounts({
       authority,
@@ -164,7 +165,8 @@ export async function revokeSession(
 ): Promise<string> {
   const tokenPda = getSessionTokenPda(authority, sessionSigner);
 
-  const tx: Transaction = await program.methods
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tx: Transaction = await (program.methods as any)
     .revokeSession()
     .accounts({ authority, sessionToken: tokenPda })
     .transaction();
