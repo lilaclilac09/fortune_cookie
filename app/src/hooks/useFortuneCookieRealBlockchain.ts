@@ -96,6 +96,17 @@ export function useFortuneCookie(): FortuneCookieHook {
     return () => clearInterval(id);
   }, [getFreshBlockhash]);
 
+  // Pre-warm shard cache so first tap doesn't wait on getAccountInfo
+  useEffect(() => {
+    if (!sessionKeypair) return;
+    const authorityKey = (connected && publicKey) ? publicKey : sessionKeypair.publicKey;
+    const { shardId, pda } = getStatsShard(authorityKey);
+    if (shardsInitializedRef.current.has(shardId)) return;
+    connection.getAccountInfo(pda).then(info => {
+      if (info) shardsInitializedRef.current.add(shardId);
+    }).catch(() => {});
+  }, [sessionKeypair, connection, connected, publicKey]);
+
   const needsFunding = sessionBalance < MIN_BALANCE_SOL;
 
   const fundSession = useCallback(async () => {
@@ -144,8 +155,10 @@ export function useFortuneCookie(): FortuneCookieHook {
             .accounts({ payer: userPubkey, shard: pda, systemProgram: SystemProgram.programId })
             .transaction();
           const signed = await signTx(tx);
-          await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
-          await new Promise(r => setTimeout(r, 1500));
+          // Fire-and-forget: don't block the open_cookie TX on shard init landing
+          connection.sendRawTransaction(signed.serialize(), { skipPreflight: true }).catch(() => {});
+          // Still wait one slot so the shard is likely available for open_cookie
+          await new Promise(r => setTimeout(r, 500));
         } catch {}
       }
       shardsInitializedRef.current.add(shardId);
@@ -163,13 +176,8 @@ export function useFortuneCookie(): FortuneCookieHook {
         // ── Determine signer + authority ────────────────────────────────────
         // Priority: session keypair (no popup) → local wallet → main wallet
 
-        let liveBalance = sessionBalance;
-        if (sessionKeypair) {
-          try {
-            liveBalance = await getSessionBalance(connection, sessionKeypair.publicKey);
-            setSessionBalance(liveBalance);
-          } catch {}
-        }
+        // Use polled balance (updated every 15s) — avoid a blocking RPC call per tap
+        const liveBalance = sessionBalance;
 
         type SignerMode = 'session' | 'local' | 'wallet';
         let signerMode: SignerMode;
