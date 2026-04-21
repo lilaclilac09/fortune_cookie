@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
-// switchboard-on-demand feature-flag: compile-time opt-in via Cargo feature "vrf"
-#[cfg(feature = "vrf")]
-use switchboard_on_demand::on_demand::accounts::RandomnessAccountData;
+// Switchboard On-Demand is an optional dep gated by the "vrf" feature.
+// Add it first: cargo add switchboard-on-demand --optional
+// Then build:   anchor build -- --features vrf
 
 declare_id!("DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85");
 
@@ -144,7 +144,7 @@ pub struct InitializeStatsShard<'info> {
         init,
         payer = payer,
         space = 8 + 8 + 1 + 1, // total_opens + shard_id + bump
-        seeds = [b"stats", &[shard_id]],
+        seeds = [b"stats".as_ref(), core::slice::from_ref(&shard_id)],
         bump
     )]
     pub shard: Account<'info, StatsShard>,
@@ -209,7 +209,7 @@ pub struct OpenCookie<'info> {
 
     #[account(
         mut,
-        seeds = [b"stats", &[shard_id]],
+        seeds = [b"stats".as_ref(), core::slice::from_ref(&shard_id)],
         bump = stats_shard.bump,
     )]
     pub stats_shard: Account<'info, StatsShard>,
@@ -309,7 +309,7 @@ pub struct OpenCookieVrf<'info> {
 
     #[account(
         mut,
-        seeds = [b"stats", &[shard_id]],
+        seeds = [b"stats".as_ref(), core::slice::from_ref(&shard_id)],
         bump = stats_shard.bump,
     )]
     pub stats_shard: Account<'info, StatsShard>,
@@ -325,21 +325,21 @@ pub struct OpenCookieVrf<'info> {
 #[cfg(feature = "vrf")]
 impl<'info> OpenCookieVrf<'info> {
     /// Extract 32 bytes of verified randomness from the Switchboard account.
-    /// Returns Err if the randomness hasn't been fulfilled yet or is stale.
+    /// Requires `switchboard-on-demand` crate to be added as an optional dep.
+    /// Returns Err if not yet fulfilled or if account data is stale (> 150 slots).
     pub fn get_verified_randomness(&self) -> Result<[u8; 32]> {
-        use switchboard_on_demand::on_demand::accounts::RandomnessAccountData;
+        // Import is valid once switchboard-on-demand is added to Cargo.toml
+        use switchboard_on_demand::on_demand::accounts::RandomnessAccountData; // requires feature = "vrf" + dep
 
         let clock = Clock::get()?;
         let data = self.randomness_account_data.try_borrow_data()?;
         let rng = RandomnessAccountData::parse(*data)
             .map_err(|_| error!(ErrorCode::RandomnessNotSettled))?;
 
-        // get_value returns Err if not yet settled
         let value = rng
             .get_value(&clock)
             .map_err(|_| error!(ErrorCode::RandomnessNotSettled))?;
 
-        // Reject if the randomness is older than 150 slots (~60 s)
         let age = clock.slot.saturating_sub(rng.seed_slot);
         require!(age <= 150, ErrorCode::RandomnessTooStale);
 

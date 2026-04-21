@@ -16,15 +16,18 @@ no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 custom-panic = []
-# Enable Switchboard VRF support: anchor build -- --features vrf
-vrf = ["switchboard-on-demand"]
+# Enable Switchboard VRF support (requires network to resolve crate first):
+#   1. cargo add switchboard-on-demand --optional --manifest-path programs/fortune_cookie/Cargo.toml
+#   2. anchor build -- --features vrf
+vrf = []  # populated automatically when you add the dep above
 
 [dependencies]
 anchor-lang = "0.31.1"
 anchor-spl = "0.31.1"
-# Pulled in only when feature "vrf" is active
-switchboard-on-demand = { version = "0.1", optional = true }
+# switchboard-on-demand = { version = "0.1", optional = true }  # uncomment after: cargo add switchboard-on-demand --optional
 
+
+[dev-dependencies]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
