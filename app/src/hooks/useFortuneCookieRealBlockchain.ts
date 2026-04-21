@@ -51,13 +51,14 @@ export function useFortuneCookie(): FortuneCookieHook {
     setSessionKeypair(getOrCreateSessionKeypair());
   }, []);
 
-  // Balance polling + auto-airdrop on devnet
+  // Balance polling — skip airdrop if a real wallet is connected (use fundSession instead)
   useEffect(() => {
     if (!sessionKeypair) return;
     const init = async () => {
       const bal = await getSessionBalance(connection, sessionKeypair.publicKey);
       setSessionBalance(bal);
-      if (bal < MIN_BALANCE_SOL && !airdropAttemptedRef.current) {
+      // Only attempt airdrop when NO main wallet is connected (demo/local-no-wallet flows)
+      if (bal < MIN_BALANCE_SOL && !airdropAttemptedRef.current && !publicKey) {
         airdropAttemptedRef.current = true;
         const funded = await autoFundSessionIfNeeded(connection, sessionKeypair.publicKey);
         if (funded) {
@@ -66,7 +67,7 @@ export function useFortuneCookie(): FortuneCookieHook {
       }
     };
     init().catch(() => {});
-  }, [sessionKeypair, connection]);
+  }, [sessionKeypair, connection, publicKey]);
 
   useEffect(() => {
     if (!sessionKeypair) return;

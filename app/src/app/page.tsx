@@ -210,8 +210,16 @@ export default function HomePage() {
               {sessionPubkey.toString().slice(0, 8)}...{sessionPubkey.toString().slice(-6)}
             </div>
             <div style={{ color: needsFunding ? '#fbbf24' : '#4ade80', fontSize: '10px' }}>
-              {sessionBalance.toFixed(4)} SOL {needsFunding ? '— airdropping...' : '— no popup needed'}
+              {sessionBalance.toFixed(4)} SOL {needsFunding ? '— needs funding' : '— no popup needed'}
             </div>
+            {needsFunding && publicKey && (
+              <button
+                onClick={fundSession}
+                style={{ marginTop: '6px', background: '#f59e0b', color: '#000', border: 'none', borderRadius: '6px', padding: '4px 10px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', width: '100%' }}
+              >
+                ⚡ Fund 0.05 SOL
+              </button>
+            )}
           </div>
         )}
         {publicKey && (
