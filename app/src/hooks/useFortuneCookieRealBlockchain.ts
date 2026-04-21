@@ -272,7 +272,7 @@ export function useFortuneCookie(): FortuneCookieHook {
             authority:    authorityPubkey,
             cookie:       cookiePda,
             statsShard,
-            sessionToken: sessionTokenPda ?? undefined,
+            sessionToken: sessionTokenPda,
             slotHashes:   SLOT_HASHES,
             systemProgram: SystemProgram.programId,
           })

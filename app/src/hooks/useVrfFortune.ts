@@ -237,7 +237,7 @@ export function useVrfFortune(): VrfFortuneHook {
                 authority:             authorityPubkey,
                 cookie:                cookiePda,
                 statsShard,
-                sessionToken:          undefined,
+                sessionToken:          null,
                 randomnessAccountData: rng.randomnessPda,
                 systemProgram:         SystemProgram.programId,
               })
@@ -281,7 +281,7 @@ export function useVrfFortune(): VrfFortuneHook {
             authority:     authorityPubkey,
             cookie:        cookiePda,
             statsShard,
-            sessionToken:  undefined,
+            sessionToken:  null,
             slotHashes:    SLOT_HASHES,
             systemProgram: SystemProgram.programId,
           })
