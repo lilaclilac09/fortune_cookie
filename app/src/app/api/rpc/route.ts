@@ -4,14 +4,19 @@ const RPC_URL = process.env.SOLANA_RPC_INTERNAL ?? 'https://api.devnet.solana.co
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    // Pass body as raw text to avoid JSON.parse/stringify mangling u64 values
+    // (e.g. rentEpoch = u64::MAX gets corrupted by JS number precision)
+    const rawBody = await request.text();
     const res = await fetch(RPC_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: rawBody,
     });
-    const data = await res.json();
-    return NextResponse.json(data);
+    const rawResponse = await res.text();
+    return new Response(rawResponse, {
+      status: res.status,
+      headers: { 'Content-Type': 'application/json' },
+    });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
