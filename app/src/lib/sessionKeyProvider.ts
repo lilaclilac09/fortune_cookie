@@ -148,9 +148,11 @@ export async function createSession(
 
   const signed = await signTransaction(tx);
   const sig = await connection.sendRawTransaction(signed.serialize());
-  await connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: sig });
-
+  // Cache immediately after send — don't gate on confirmation.
+  // If confirmTransaction times out (common on devnet), the TX usually landed anyway.
+  // If it actually failed, getSessionStatus will detect it on the next call.
   cacheSession(authority, until);
+  connection.confirmTransaction({ blockhash, lastValidBlockHeight, signature: sig }).catch(() => {});
   return sig;
 }
 
@@ -208,6 +210,17 @@ export async function ensureSession(
     return tokenPda;
   }
 
-  await createSession(connection, program, authority, signTransaction, sessionSigner);
+  try {
+    await createSession(connection, program, authority, signTransaction, sessionSigner);
+  } catch (err) {
+    // createSession can fail if the PDA already exists (init constraint) or if
+    // confirmation timed out but the TX landed. Re-check on-chain before giving up.
+    const recheck = await getSessionStatus(connection, authority, sessionSigner);
+    if (recheck.valid) {
+      cacheSession(authority, recheck.validUntil);
+    } else {
+      throw err;
+    }
+  }
   return tokenPda;
 }
