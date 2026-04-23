@@ -39,9 +39,18 @@ const CRACK_COST_SOL = 0.001;
 export default function HomePage() {
   const { publicKey, connected, disconnect } = useWallet();
   const { mode, setMode, localWallet } = useWalletMode();
-  const { recordFortune } = useFortuneCookie();
+  const {
+    recordFortune,
+    session,
+    sessionRemaining,
+    isPreparingSession,
+    prepareSession,
+    topUpSession,
+    resetSession,
+  } = useFortuneCookie();
   const [isDemoMode, setIsDemoMode] = useState(mode === 'demo');
   const [isLocalMode, setIsLocalMode] = useState(mode === 'local');
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   const [stats, setStats] = useState<Stats>({ totalPoints: 0, tapCount: 0 });
 
@@ -131,6 +140,26 @@ export default function HomePage() {
       setTxError(null);
     }, 300);
   };
+
+  const handlePrepareSession = useCallback(async () => {
+    setSessionError(null);
+    try {
+      await prepareSession();
+    } catch (err: any) {
+      setSessionError(err?.message || 'Session prep failed');
+    }
+  }, [prepareSession]);
+
+  const handleTopUpSession = useCallback(async () => {
+    setSessionError(null);
+    try {
+      await topUpSession();
+    } catch (err: any) {
+      setSessionError(err?.message || 'Refill failed');
+    }
+  }, [topUpSession]);
+
+  const sessionEligible = (isLocalMode && !!localWallet) || (!!connected && !!publicKey);
 
   // Shake-to-crack (mobile accelerometer)
   // iOS 13+ requires DeviceMotionEvent.requestPermission() from a user gesture.
@@ -272,6 +301,62 @@ export default function HomePage() {
           <div style={{ fontSize: '20px', fontWeight: 900, marginTop: '8px' }}>{stats.totalPoints} PTS</div>
         </div>
       </div>
+
+      {/* Durable-Nonce Pre-Signing Session Panel */}
+      {sessionEligible && (
+        <div style={{ position: 'absolute', bottom: '32px', left: '32px', background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(12px)', padding: '16px 20px', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.15)', color: 'white', maxWidth: '320px', fontSize: '12px', lineHeight: 1.4 }}>
+          <div style={{ fontWeight: 900, fontSize: '13px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            ⚡ Pre-Signed Session
+            <span style={{ marginLeft: 'auto', opacity: 0.7, fontSize: '11px' }}>durable nonce</span>
+          </div>
+          {session ? (
+            <>
+              <div style={{ fontSize: '22px', fontWeight: 900, color: sessionRemaining > 0 ? '#22c55e' : '#f87171' }}>
+                {sessionRemaining} / {session.slots.length}
+              </div>
+              <div style={{ opacity: 0.85, marginTop: '4px' }}>
+                {sessionRemaining > 0
+                  ? 'Cracks remaining without a wallet prompt.'
+                  : 'Session exhausted. Refill for another batch.'}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={handleTopUpSession}
+                  disabled={isPreparingSession}
+                  style={{ background: '#f59e0b', color: '#1f2937', fontWeight: 900, border: 'none', padding: '8px 12px', borderRadius: '8px', cursor: isPreparingSession ? 'wait' : 'pointer', fontSize: '11px' }}
+                >
+                  {isPreparingSession ? '⏳ Signing…' : '♻️ Refill batch'}
+                </button>
+                <button
+                  onClick={resetSession}
+                  disabled={isPreparingSession}
+                  style={{ background: 'transparent', color: '#fca5a5', border: '1px solid rgba(252,165,165,0.5)', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '11px' }}
+                >
+                  Clear
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ opacity: 0.85 }}>
+                Sign once, crack many. Creates 5 nonce accounts + pre-signs 5 open_cookie txs behind two wallet prompts.
+              </div>
+              <button
+                onClick={handlePrepareSession}
+                disabled={isPreparingSession}
+                style={{ marginTop: '10px', background: '#22c55e', color: 'white', fontWeight: 900, border: 'none', padding: '10px 14px', borderRadius: '8px', cursor: isPreparingSession ? 'wait' : 'pointer', fontSize: '12px', width: '100%' }}
+              >
+                {isPreparingSession ? '⏳ Preparing session…' : '⚡ Prepare pre-signed session'}
+              </button>
+            </>
+          )}
+          {sessionError && (
+            <div style={{ marginTop: '8px', color: '#fca5a5', fontSize: '11px' }}>
+              ⚠ {sessionError}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Main Content */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 20, position: 'relative' }}>
