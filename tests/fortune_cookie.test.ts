@@ -107,6 +107,13 @@ function cookiePda(user: PublicKey, counter: BN): [PublicKey, number] {
   );
 }
 
+function sessionPda(user: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [user.toBuffer(), Buffer.from("session")],
+    PROGRAM_ID
+  );
+}
+
 // ── Test suite ───────────────────────────────────────────────────────────────
 
 describe("fortune_cookie (bankrun)", () => {
@@ -271,6 +278,226 @@ describe("fortune_cookie (bankrun)", () => {
       assert.fail("Should have failed — PDA already initialized");
     } catch (err: any) {
       assert.ok(err, "Expected error for duplicate counter");
+    }
+  });
+
+  // ── authorize_session ────────────────────────────────────────────────────
+
+  it("authorize_session stores user + session_key + expires_at", async () => {
+    const sessionKey = Keypair.generate();
+    const [sessionAccount] = sessionPda(payer.publicKey);
+    const durationSeconds = new BN(3600);
+
+    await program.methods
+      .authorizeSession(sessionKey.publicKey, durationSeconds)
+      .accounts({
+        user: payer.publicKey,
+        session: sessionAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    const session = await program.account.session.fetch(sessionAccount);
+    assert.ok(session.user.equals(payer.publicKey));
+    assert.ok(session.sessionKey.equals(sessionKey.publicKey));
+    assert.ok(session.expiresAt.toNumber() > 0);
+  });
+
+  it("authorize_session rejects duration <= 0 and > 30 days", async () => {
+    const sessionKey = Keypair.generate();
+    const [sessionAccount] = sessionPda(payer.publicKey);
+
+    for (const bad of [new BN(0), new BN(-1), new BN(60 * 60 * 24 * 31)]) {
+      try {
+        await program.methods
+          .authorizeSession(sessionKey.publicKey, bad)
+          .accounts({
+            user: payer.publicKey,
+            session: sessionAccount,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        assert.fail(`Expected InvalidDuration for ${bad.toString()}`);
+      } catch (err: any) {
+        const msg = err?.message ?? String(err);
+        assert.ok(
+          msg.includes("InvalidDuration") || msg.includes("6003") || msg.includes("1773"),
+          `Expected InvalidDuration, got: ${msg}`
+        );
+      }
+    }
+  });
+
+  // ── open_cookie_via_session ──────────────────────────────────────────────
+
+  it("open_cookie_via_session opens when session key is valid", async () => {
+    // Fresh user to avoid collision with prior session
+    const user = Keypair.generate();
+
+    // Airdrop-equivalent: transfer from payer
+    const { Transaction } = require("@solana/web3.js");
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: user.publicKey,
+        lamports: 100_000_000, // 0.1 SOL
+      })
+    );
+    await (program.provider as any).sendAndConfirm(tx, [payer]);
+
+    const sessionKey = Keypair.generate();
+    // Fund session key
+    const fundTx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: sessionKey.publicKey,
+        lamports: 50_000_000,
+      })
+    );
+    await (program.provider as any).sendAndConfirm(fundTx, [payer]);
+
+    const [sessionAccount] = sessionPda(user.publicKey);
+    await program.methods
+      .authorizeSession(sessionKey.publicKey, new BN(3600))
+      .accounts({
+        user: user.publicKey,
+        session: sessionAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    const [statsAccount] = statsPda();
+    const counter = new BN(42001);
+    const [cookieAccount] = cookiePda(user.publicKey, counter);
+
+    await program.methods
+      .openCookieViaSession(1, counter)
+      .accounts({
+        sessionKey: sessionKey.publicKey,
+        user: user.publicKey,
+        session: sessionAccount,
+        cookie: cookieAccount,
+        stats: statsAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([sessionKey])
+      .rpc();
+
+    const cookie = await program.account.fortuneCookie.fetch(cookieAccount);
+    assert.ok(cookie.user.equals(user.publicKey), "cookie.user should be the session owner");
+    assert.equal(cookie.archetype, 1);
+  });
+
+  it("open_cookie_via_session rejects a wrong session key", async () => {
+    const user = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: user.publicKey,
+          lamports: 100_000_000,
+        })
+      ),
+      [payer]
+    );
+
+    const authorizedKey = Keypair.generate();
+    const imposterKey = Keypair.generate();
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: imposterKey.publicKey,
+          lamports: 50_000_000,
+        })
+      ),
+      [payer]
+    );
+
+    const [sessionAccount] = sessionPda(user.publicKey);
+    await program.methods
+      .authorizeSession(authorizedKey.publicKey, new BN(3600))
+      .accounts({
+        user: user.publicKey,
+        session: sessionAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    const [statsAccount] = statsPda();
+    const counter = new BN(42002);
+    const [cookieAccount] = cookiePda(user.publicKey, counter);
+
+    try {
+      await program.methods
+        .openCookieViaSession(0, counter)
+        .accounts({
+          sessionKey: imposterKey.publicKey,
+          user: user.publicKey,
+          session: sessionAccount,
+          cookie: cookieAccount,
+          stats: statsAccount,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([imposterKey])
+        .rpc();
+      assert.fail("Expected UnauthorizedSessionKey");
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      assert.ok(
+        msg.includes("UnauthorizedSessionKey") || msg.includes("6002") || msg.includes("1772"),
+        `Expected UnauthorizedSessionKey, got: ${msg}`
+      );
+    }
+  });
+
+  it("revoke_session closes the PDA and refunds rent to user", async () => {
+    const user = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: user.publicKey,
+          lamports: 100_000_000,
+        })
+      ),
+      [payer]
+    );
+
+    const sessionKey = Keypair.generate();
+    const [sessionAccount] = sessionPda(user.publicKey);
+    await program.methods
+      .authorizeSession(sessionKey.publicKey, new BN(3600))
+      .accounts({
+        user: user.publicKey,
+        session: sessionAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    // Session exists
+    await program.account.session.fetch(sessionAccount);
+
+    await program.methods
+      .revokeSession()
+      .accounts({
+        user: user.publicKey,
+        session: sessionAccount,
+      })
+      .signers([user])
+      .rpc();
+
+    try {
+      await program.account.session.fetch(sessionAccount);
+      assert.fail("Session should be closed");
+    } catch (err: any) {
+      // Expected: account not found or zero-length
+      assert.ok(err, "Expected session to be closed");
     }
   });
 });

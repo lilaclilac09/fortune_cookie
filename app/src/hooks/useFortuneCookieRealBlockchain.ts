@@ -15,6 +15,16 @@ import {
   remainingSlots,
   SignerWallet,
 } from '@/lib/durable-nonce-session';
+import {
+  authorizeSession,
+  clearSessionKey,
+  isSessionKeyValid,
+  loadSessionKey,
+  openViaSession,
+  revokeSession,
+  secondsUntilExpiry,
+  StoredSessionKey,
+} from '@/lib/session-key';
 
 const PROGRAM_ID = new PublicKey('DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85');
 
@@ -28,6 +38,12 @@ export interface FortuneCookieHook {
   prepareSession: (batchSize?: number) => Promise<void>;
   topUpSession: () => Promise<void>;
   resetSession: () => void;
+  sessionKey: StoredSessionKey | null;
+  sessionKeyValid: boolean;
+  sessionKeyExpiresInSeconds: number;
+  isAuthorizingSessionKey: boolean;
+  authorizeSessionKey: (durationSeconds?: number) => Promise<void>;
+  revokeSessionKey: () => Promise<void>;
 }
 
 export function useFortuneCookie(): FortuneCookieHook {
@@ -40,6 +56,9 @@ export function useFortuneCookie(): FortuneCookieHook {
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<PresignedSession | null>(null);
   const [isPreparingSession, setIsPreparingSession] = useState(false);
+  const [sessionKey, setSessionKey] = useState<StoredSessionKey | null>(null);
+  const [isAuthorizingSessionKey, setIsAuthorizingSessionKey] = useState(false);
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
 
   const activePubkey: PublicKey | null = useMemo(() => {
     if (mode === 'local' && localWallet) return localWallet.publicKey;
@@ -76,10 +95,20 @@ export function useFortuneCookie(): FortuneCookieHook {
   useEffect(() => {
     if (!activePubkey) {
       setSession(null);
+      setSessionKey(null);
       return;
     }
     setSession(loadSession(activePubkey, PROGRAM_ID));
+    setSessionKey(loadSessionKey(activePubkey, PROGRAM_ID));
   }, [activePubkey]);
+
+  useEffect(() => {
+    const id = setInterval(
+      () => setNowSeconds(Math.floor(Date.now() / 1000)),
+      1000,
+    );
+    return () => clearInterval(id);
+  }, []);
 
   const prepareSession = useCallback(
     async (batchSize: number = DEFAULT_BATCH_SIZE) => {
@@ -136,12 +165,73 @@ export function useFortuneCookie(): FortuneCookieHook {
     setSession(null);
   }, [activePubkey]);
 
+  const authorizeSessionKey = useCallback(
+    async (durationSeconds?: number) => {
+      if (!signerWallet) throw new Error('Wallet not connected');
+      setIsAuthorizingSessionKey(true);
+      setError(null);
+      try {
+        const next = await authorizeSession({
+          connection,
+          wallet: signerWallet,
+          programId: PROGRAM_ID,
+          durationSeconds,
+        });
+        setSessionKey(next);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Authorize failed';
+        setError(msg);
+        throw err;
+      } finally {
+        setIsAuthorizingSessionKey(false);
+      }
+    },
+    [connection, signerWallet],
+  );
+
+  const revokeSessionKey = useCallback(async () => {
+    if (!signerWallet || !sessionKey) return;
+    setIsAuthorizingSessionKey(true);
+    setError(null);
+    try {
+      await revokeSession(connection, signerWallet, PROGRAM_ID, sessionKey);
+      setSessionKey(null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Revoke failed';
+      setError(msg);
+      // Even if on-chain revoke fails, clear local cache so user can re-auth.
+      if (activePubkey) {
+        clearSessionKey(activePubkey, PROGRAM_ID);
+        setSessionKey(null);
+      }
+      throw err;
+    } finally {
+      setIsAuthorizingSessionKey(false);
+    }
+  }, [connection, signerWallet, sessionKey, activePubkey]);
+
   const recordFortune = useCallback(
     async (archetype: number): Promise<string> => {
       setIsLoading(true);
       setError(null);
 
       try {
+        if (sessionKey && isSessionKeyValid(sessionKey)) {
+          const consumed = await openViaSession(
+            connection,
+            sessionKey,
+            PROGRAM_ID,
+            archetype,
+          );
+          const refreshed = loadSessionKey(
+            new PublicKey(sessionKey.userPubkey),
+            PROGRAM_ID,
+          );
+          setSessionKey(refreshed);
+          console.log('✅ Fortune recorded via session key', consumed);
+          return consumed.signature;
+        }
+
         if (session && session.nextIndex < session.slots.length) {
           const consumed = await consumeNextSlot(connection, session);
           setSession({ ...session });
@@ -186,6 +276,7 @@ export function useFortuneCookie(): FortuneCookieHook {
     [
       connection,
       session,
+      sessionKey,
       mode,
       localWallet,
       publicKey,
@@ -204,6 +295,12 @@ export function useFortuneCookie(): FortuneCookieHook {
     prepareSession,
     topUpSession,
     resetSession,
+    sessionKey,
+    sessionKeyValid: isSessionKeyValid(sessionKey, nowSeconds),
+    sessionKeyExpiresInSeconds: secondsUntilExpiry(sessionKey, nowSeconds),
+    isAuthorizingSessionKey,
+    authorizeSessionKey,
+    revokeSessionKey,
   };
 }
 

@@ -47,6 +47,12 @@ export default function HomePage() {
     prepareSession,
     topUpSession,
     resetSession,
+    sessionKey,
+    sessionKeyValid,
+    sessionKeyExpiresInSeconds,
+    isAuthorizingSessionKey,
+    authorizeSessionKey,
+    revokeSessionKey,
   } = useFortuneCookie();
   const [isDemoMode, setIsDemoMode] = useState(mode === 'demo');
   const [isLocalMode, setIsLocalMode] = useState(mode === 'local');
@@ -158,6 +164,34 @@ export default function HomePage() {
       setSessionError(err?.message || 'Refill failed');
     }
   }, [topUpSession]);
+
+  const handleAuthorizeSessionKey = useCallback(async () => {
+    setSessionError(null);
+    try {
+      await authorizeSessionKey();
+    } catch (err: any) {
+      setSessionError(err?.message || 'Authorize failed');
+    }
+  }, [authorizeSessionKey]);
+
+  const handleRevokeSessionKey = useCallback(async () => {
+    setSessionError(null);
+    try {
+      await revokeSessionKey();
+    } catch (err: any) {
+      setSessionError(err?.message || 'Revoke failed');
+    }
+  }, [revokeSessionKey]);
+
+  const formatExpiry = (seconds: number): string => {
+    if (seconds <= 0) return 'expired';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  };
 
   const sessionEligible = (isLocalMode && !!localWallet) || (!!connected && !!publicKey);
 
@@ -301,6 +335,72 @@ export default function HomePage() {
           <div style={{ fontSize: '20px', fontWeight: 900, marginTop: '8px' }}>{stats.totalPoints} PTS</div>
         </div>
       </div>
+
+      {/* Session Key Panel (primary; supersedes durable-nonce when active) */}
+      {sessionEligible && (
+        <div style={{ position: 'absolute', bottom: '32px', right: '32px', background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(12px)', padding: '16px 20px', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.15)', color: 'white', maxWidth: '320px', fontSize: '12px', lineHeight: 1.4 }}>
+          <div style={{ fontWeight: 900, fontSize: '13px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            🔑 Session Key
+            <span style={{ marginLeft: 'auto', opacity: 0.7, fontSize: '11px' }}>delegated signer</span>
+          </div>
+          {sessionKey && sessionKeyValid ? (
+            <>
+              <div style={{ fontSize: '18px', fontWeight: 900, color: '#22c55e' }}>
+                Active · {formatExpiry(sessionKeyExpiresInSeconds)}
+              </div>
+              <div style={{ opacity: 0.85, marginTop: '4px', fontFamily: 'monospace', fontSize: '10px' }}>
+                {sessionKey.sessionPda.slice(0, 8)}…{sessionKey.sessionPda.slice(-6)}
+              </div>
+              <div style={{ opacity: 0.85, marginTop: '6px' }}>
+                Opens sign silently with the delegated key until expiry.
+              </div>
+              <button
+                onClick={handleRevokeSessionKey}
+                disabled={isAuthorizingSessionKey}
+                style={{ marginTop: '10px', background: '#ef4444', color: 'white', fontWeight: 900, border: 'none', padding: '8px 12px', borderRadius: '8px', cursor: isAuthorizingSessionKey ? 'wait' : 'pointer', fontSize: '11px', width: '100%' }}
+              >
+                {isAuthorizingSessionKey ? '⏳ Revoking…' : '🗑 Revoke session key'}
+              </button>
+            </>
+          ) : sessionKey && !sessionKeyValid ? (
+            <>
+              <div style={{ fontSize: '14px', fontWeight: 900, color: '#f87171' }}>Expired</div>
+              <div style={{ opacity: 0.85, marginTop: '4px' }}>
+                Re-authorize to resume silent signing.
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                <button
+                  onClick={handleAuthorizeSessionKey}
+                  disabled={isAuthorizingSessionKey}
+                  style={{ flex: 1, background: '#22c55e', color: 'white', fontWeight: 900, border: 'none', padding: '8px 12px', borderRadius: '8px', cursor: isAuthorizingSessionKey ? 'wait' : 'pointer', fontSize: '11px' }}
+                >
+                  {isAuthorizingSessionKey ? '⏳…' : '↻ Re-authorize'}
+                </button>
+                <button
+                  onClick={handleRevokeSessionKey}
+                  disabled={isAuthorizingSessionKey}
+                  style={{ background: 'transparent', color: '#fca5a5', border: '1px solid rgba(252,165,165,0.5)', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '11px' }}
+                >
+                  Clear
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ opacity: 0.85 }}>
+                Sign once, crack as many cookies as you want (1 hour). No more wallet prompts until expiry or revoke.
+              </div>
+              <button
+                onClick={handleAuthorizeSessionKey}
+                disabled={isAuthorizingSessionKey}
+                style={{ marginTop: '10px', background: '#22c55e', color: 'white', fontWeight: 900, border: 'none', padding: '10px 14px', borderRadius: '8px', cursor: isAuthorizingSessionKey ? 'wait' : 'pointer', fontSize: '12px', width: '100%' }}
+              >
+                {isAuthorizingSessionKey ? '⏳ Authorizing…' : '🔑 Authorize session key'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Durable-Nonce Pre-Signing Session Panel */}
       {sessionEligible && (
