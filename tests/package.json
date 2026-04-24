@@ -4,7 +4,9 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "mocha --import=tsx --timeout 60000 '*.test.ts'"
+    "test": "mocha --import=tsx --timeout 60000 '*.test.ts'",
+    "e2e:live": "tsx ../scripts/devnet-live-loop.ts",
+    "e2e:session": "tsx ../scripts/devnet-session-key-loop.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.30.1",

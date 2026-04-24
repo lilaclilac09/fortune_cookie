@@ -454,6 +454,98 @@ describe("fortune_cookie (bankrun)", () => {
     }
   });
 
+  it("one authorize_session → N silent open_cookie_via_session calls (unlimited loop)", async () => {
+    const user = Keypair.generate();
+    const sessionKey = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+
+    // Fund user + session key from bankrun payer
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: user.publicKey,
+          lamports: 200_000_000,
+        }),
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: sessionKey.publicKey,
+          lamports: 500_000_000, // 0.5 SOL — plenty for many opens
+        })
+      ),
+      [payer]
+    );
+
+    const [sessionAccount] = sessionPda(user.publicKey);
+    const [statsAccount] = statsPda();
+
+    // Single authorize_session — ONE "user signature". Counts as the one-time cost.
+    const authStart = Date.now();
+    await program.methods
+      .authorizeSession(sessionKey.publicKey, new BN(3600))
+      .accounts({
+        user: user.publicKey,
+        session: sessionAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+    const authMs = Date.now() - authStart;
+
+    // Now loop: open N cookies using ONLY the session key — no user signature.
+    const N = 25;
+    const statsBefore = await program.account.stats.fetch(statsAccount);
+    const openedBefore = statsBefore.totalOpens.toNumber();
+
+    const signatures: string[] = [];
+    const loopStart = Date.now();
+    for (let i = 0; i < N; i++) {
+      const counter = new BN(900000 + i);
+      const [cookieAccount] = cookiePda(user.publicKey, counter);
+      const archetype = i % 4;
+
+      const sig = await program.methods
+        .openCookieViaSession(archetype, counter)
+        .accounts({
+          sessionKey: sessionKey.publicKey,
+          user: user.publicKey,
+          session: sessionAccount,
+          cookie: cookieAccount,
+          stats: statsAccount,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([sessionKey])  // <-- user is NOT in signers
+        .rpc();
+      signatures.push(sig);
+
+      // Assert cookie written correctly
+      const cookie = await program.account.fortuneCookie.fetch(cookieAccount);
+      assert.ok(cookie.user.equals(user.publicKey));
+      assert.equal(cookie.archetype, archetype);
+    }
+    const loopMs = Date.now() - loopStart;
+
+    // Stats should have incremented N times
+    const statsAfter = await program.account.stats.fetch(statsAccount);
+    assert.equal(
+      statsAfter.totalOpens.toNumber(),
+      openedBefore + N,
+      "stats must increment once per open"
+    );
+
+    // All N signatures distinct → each was a real on-chain tx
+    assert.equal(new Set(signatures).size, N, "each open should have a unique signature");
+
+    // Session still valid → user could keep going indefinitely until expiry
+    const session = await program.account.session.fetch(sessionAccount);
+    assert.ok(session.sessionKey.equals(sessionKey.publicKey));
+
+    console.log(
+      `  ✓ 1 authorize_session (${authMs}ms) → ${N} silent opens in ${loopMs}ms ` +
+      `(avg ${(loopMs / N).toFixed(1)}ms/open) · session still live`
+    );
+  });
+
   it("revoke_session closes the PDA and refunds rent to user", async () => {
     const user = Keypair.generate();
     const { Transaction } = require("@solana/web3.js");
