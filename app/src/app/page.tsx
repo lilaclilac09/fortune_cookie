@@ -53,6 +53,14 @@ export default function HomePage() {
     isAuthorizingSessionKey,
     authorizeSessionKey,
     revokeSessionKey,
+    prepaidBalanceLamports,
+    prepaidRemainingOpens,
+    treasuryLamports,
+    isDepositing,
+    isWithdrawing,
+    deposit,
+    withdraw,
+    feeLamports,
   } = useFortuneCookie();
   const [isDemoMode, setIsDemoMode] = useState(mode === 'demo');
   const [isLocalMode, setIsLocalMode] = useState(mode === 'local');
@@ -182,6 +190,24 @@ export default function HomePage() {
       setSessionError(err?.message || 'Revoke failed');
     }
   }, [revokeSessionKey]);
+
+  const handleDeposit = useCallback(async (sol: number) => {
+    setSessionError(null);
+    try {
+      await deposit(Math.round(sol * 1_000_000_000));
+    } catch (err: any) {
+      setSessionError(err?.message || 'Deposit failed');
+    }
+  }, [deposit]);
+
+  const handleWithdrawAll = useCallback(async () => {
+    setSessionError(null);
+    try {
+      await withdraw(prepaidBalanceLamports);
+    } catch (err: any) {
+      setSessionError(err?.message || 'Withdraw failed');
+    }
+  }, [withdraw, prepaidBalanceLamports]);
 
   const formatExpiry = (seconds: number): string => {
     if (seconds <= 0) return 'expired';
@@ -335,6 +361,57 @@ export default function HomePage() {
           <div style={{ fontSize: '20px', fontWeight: 900, marginTop: '8px' }}>{stats.totalPoints} PTS</div>
         </div>
       </div>
+
+      {/* Prepaid Balance + Treasury Panel */}
+      {sessionEligible && (
+        <div style={{ position: 'absolute', top: '32px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(12px)', padding: '14px 18px', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.15)', color: 'white', fontSize: '12px', lineHeight: 1.4, display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <div>
+            <div style={{ opacity: 0.7, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+              Prepaid balance
+            </div>
+            <div style={{ fontSize: '20px', fontWeight: 900 }}>
+              {(prepaidBalanceLamports / 1_000_000_000).toFixed(4)} SOL
+            </div>
+            <div style={{ opacity: 0.75, fontSize: '11px' }}>
+              ≈ {prepaidRemainingOpens} cookies · fee {(feeLamports / 1_000_000_000).toFixed(4)} SOL ea
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              onClick={() => handleDeposit(0.01)}
+              disabled={isDepositing}
+              style={{ background: '#10b981', color: 'white', fontWeight: 900, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: isDepositing ? 'wait' : 'pointer', fontSize: '11px' }}
+            >
+              {isDepositing ? '⏳' : '+ 0.01'}
+            </button>
+            <button
+              onClick={() => handleDeposit(0.05)}
+              disabled={isDepositing}
+              style={{ background: '#10b981', color: 'white', fontWeight: 900, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: isDepositing ? 'wait' : 'pointer', fontSize: '11px' }}
+            >
+              {isDepositing ? '⏳' : '+ 0.05'}
+            </button>
+            <button
+              onClick={handleWithdrawAll}
+              disabled={isWithdrawing || prepaidBalanceLamports === 0}
+              style={{ background: prepaidBalanceLamports === 0 ? '#475569' : '#ef4444', color: 'white', fontWeight: 900, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: (isWithdrawing || prepaidBalanceLamports === 0) ? 'not-allowed' : 'pointer', fontSize: '11px' }}
+            >
+              {isWithdrawing ? '⏳' : '↓ all'}
+            </button>
+          </div>
+          <div style={{ borderLeft: '1px solid rgba(255,255,255,0.2)', paddingLeft: '16px' }}>
+            <div style={{ opacity: 0.7, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+              Treasury
+            </div>
+            <div style={{ fontSize: '16px', fontWeight: 900, color: '#fbbf24' }}>
+              {(treasuryLamports / 1_000_000_000).toFixed(4)} SOL
+            </div>
+            <div style={{ opacity: 0.75, fontSize: '10px' }}>
+              = {Math.floor(treasuryLamports / feeLamports)} opens collected
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Session Key Panel (primary; supersedes durable-nonce when active) */}
       {sessionEligible && (

@@ -114,6 +114,20 @@ function sessionPda(user: PublicKey): [PublicKey, number] {
   );
 }
 
+function balancePda(user: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [user.toBuffer(), Buffer.from("balance")],
+    PROGRAM_ID
+  );
+}
+
+function treasuryPda(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("treasury")],
+    PROGRAM_ID
+  );
+}
+
 // ── Test suite ───────────────────────────────────────────────────────────────
 
 describe("fortune_cookie (bankrun)", () => {
@@ -544,6 +558,223 @@ describe("fortune_cookie (bankrun)", () => {
       `  ✓ 1 authorize_session (${authMs}ms) → ${N} silent opens in ${loopMs}ms ` +
       `(avg ${(loopMs / N).toFixed(1)}ms/open) · session still live`
     );
+  });
+
+  // ── prepaid balance + treasury fee ──────────────────────────────────────
+
+  it("deposit → open_cookie_prepaid loop drains balance PDA, fills treasury", async () => {
+    const user = Keypair.generate();
+    const sessionKey = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+
+    // Fund user + session key
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: user.publicKey,
+          lamports: 500_000_000,
+        }),
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: sessionKey.publicKey,
+          lamports: 100_000_000,
+        })
+      ),
+      [payer]
+    );
+
+    const [sessionAccount] = sessionPda(user.publicKey);
+    const [balanceAccount] = balancePda(user.publicKey);
+    const [treasuryAccount] = treasuryPda();
+    const [statsAccount] = statsPda();
+
+    // 1. Authorize session
+    await program.methods
+      .authorizeSession(sessionKey.publicKey, new BN(3600))
+      .accounts({
+        user: user.publicKey,
+        session: sessionAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    // 2. Deposit 0.05 SOL into balance PDA
+    const depositLamports = 50_000_000;
+    await program.methods
+      .deposit(new BN(depositLamports))
+      .accounts({
+        user: user.publicKey,
+        balance: balanceAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    const balanceAfterDeposit = await program.provider.connection.getBalance(balanceAccount);
+    assert.equal(balanceAfterDeposit, depositLamports, "balance PDA should hold deposited amount");
+
+    // 3. Open 3 cookies via prepaid — session key signs, user does NOT
+    const treasuryBefore = await program.provider.connection.getBalance(treasuryAccount);
+    const N = 3;
+    for (let i = 0; i < N; i++) {
+      const counter = new BN(77000 + i);
+      const [cookieAccount] = cookiePda(user.publicKey, counter);
+
+      await program.methods
+        .openCookiePrepaid(i % 4, counter)
+        .accounts({
+          sessionKey: sessionKey.publicKey,
+          user: user.publicKey,
+          session: sessionAccount,
+          balance: balanceAccount,
+          treasury: treasuryAccount,
+          cookie: cookieAccount,
+          stats: statsAccount,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([sessionKey])
+        .rpc();
+
+      // Cookie was created with correct data
+      const cookie = await program.account.fortuneCookie.fetch(cookieAccount);
+      assert.ok(cookie.user.equals(user.publicKey));
+      assert.equal(cookie.archetype, i % 4);
+    }
+
+    // Treasury gained exactly N * 500_000 lamports
+    const treasuryAfter = await program.provider.connection.getBalance(treasuryAccount);
+    assert.equal(
+      treasuryAfter - treasuryBefore,
+      N * 500_000,
+      "treasury should collect 0.0005 SOL per open"
+    );
+
+    // Balance PDA drained by N * (rent + fee); should still have some left
+    const balanceAfter = await program.provider.connection.getBalance(balanceAccount);
+    assert.ok(
+      balanceAfter < balanceAfterDeposit,
+      "balance PDA should be debited for rent + fee per open"
+    );
+    const totalCost = balanceAfterDeposit - balanceAfter;
+    console.log(
+      `  ✓ ${N} prepaid opens cost ${totalCost} lamports (${(totalCost / 1_000_000_000).toFixed(6)} SOL) from balance PDA; treasury +${(N * 500_000) / 1_000_000_000} SOL`
+    );
+  });
+
+  it("open_cookie_prepaid fails with InsufficientBalance when balance is empty", async () => {
+    const user = Keypair.generate();
+    const sessionKey = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: user.publicKey,
+          lamports: 100_000_000,
+        }),
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: sessionKey.publicKey,
+          lamports: 50_000_000,
+        })
+      ),
+      [payer]
+    );
+
+    const [sessionAccount] = sessionPda(user.publicKey);
+    const [balanceAccount] = balancePda(user.publicKey);
+    const [treasuryAccount] = treasuryPda();
+    const [statsAccount] = statsPda();
+
+    await program.methods
+      .authorizeSession(sessionKey.publicKey, new BN(3600))
+      .accounts({
+        user: user.publicKey,
+        session: sessionAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    // Deposit nothing — balance PDA doesn't exist / is empty
+    const counter = new BN(88001);
+    const [cookieAccount] = cookiePda(user.publicKey, counter);
+
+    try {
+      await program.methods
+        .openCookiePrepaid(0, counter)
+        .accounts({
+          sessionKey: sessionKey.publicKey,
+          user: user.publicKey,
+          session: sessionAccount,
+          balance: balanceAccount,
+          treasury: treasuryAccount,
+          cookie: cookieAccount,
+          stats: statsAccount,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([sessionKey])
+        .rpc();
+      assert.fail("Expected InsufficientBalance");
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      assert.ok(
+        msg.includes("InsufficientBalance") || msg.includes("6005") || msg.includes("1775"),
+        `Expected InsufficientBalance, got: ${msg}`
+      );
+    }
+  });
+
+  it("withdraw moves SOL back to user", async () => {
+    const user = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: user.publicKey,
+          lamports: 200_000_000,
+        })
+      ),
+      [payer]
+    );
+
+    const [balanceAccount] = balancePda(user.publicKey);
+    const depositAmount = 80_000_000;
+    await program.methods
+      .deposit(new BN(depositAmount))
+      .accounts({
+        user: user.publicKey,
+        balance: balanceAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    const userBefore = await program.provider.connection.getBalance(user.publicKey);
+    const withdrawAmount = 30_000_000;
+    await program.methods
+      .withdraw(new BN(withdrawAmount))
+      .accounts({
+        user: user.publicKey,
+        balance: balanceAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    const userAfter = await program.provider.connection.getBalance(user.publicKey);
+    const balanceAfter = await program.provider.connection.getBalance(balanceAccount);
+
+    // User got back withdrawAmount minus the tx fee paid
+    assert.ok(
+      userAfter - userBefore >= withdrawAmount - 10_000,
+      `user balance should increase by ~${withdrawAmount}, got ${userAfter - userBefore}`
+    );
+    assert.equal(balanceAfter, depositAmount - withdrawAmount);
   });
 
   it("revoke_session closes the PDA and refunds rent to user", async () => {

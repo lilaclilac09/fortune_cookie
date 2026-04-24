@@ -25,6 +25,16 @@ import {
   secondsUntilExpiry,
   StoredSessionKey,
 } from '@/lib/session-key';
+import {
+  COST_PER_OPEN_ESTIMATE,
+  deposit as prepaidDeposit,
+  estimateRemainingOpens,
+  FEE_LAMPORTS,
+  getPrepaidBalanceLamports,
+  getTreasuryLamports,
+  openPrepaid,
+  withdraw as prepaidWithdraw,
+} from '@/lib/prepaid';
 
 const PROGRAM_ID = new PublicKey('DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85');
 
@@ -44,6 +54,16 @@ export interface FortuneCookieHook {
   isAuthorizingSessionKey: boolean;
   authorizeSessionKey: (durationSeconds?: number) => Promise<void>;
   revokeSessionKey: () => Promise<void>;
+  prepaidBalanceLamports: number;
+  prepaidRemainingOpens: number;
+  treasuryLamports: number;
+  isDepositing: boolean;
+  isWithdrawing: boolean;
+  deposit: (amountLamports: number) => Promise<void>;
+  withdraw: (amountLamports: number) => Promise<void>;
+  refreshBalances: () => Promise<void>;
+  feeLamports: number;
+  costPerOpenLamports: number;
 }
 
 export function useFortuneCookie(): FortuneCookieHook {
@@ -59,6 +79,10 @@ export function useFortuneCookie(): FortuneCookieHook {
   const [sessionKey, setSessionKey] = useState<StoredSessionKey | null>(null);
   const [isAuthorizingSessionKey, setIsAuthorizingSessionKey] = useState(false);
   const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
+  const [prepaidBalanceLamports, setPrepaidBalanceLamports] = useState(0);
+  const [treasuryLamports, setTreasuryLamports] = useState(0);
+  const [isDepositing, setIsDepositing] = useState(false);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
 
   const activePubkey: PublicKey | null = useMemo(() => {
     if (mode === 'local' && localWallet) return localWallet.publicKey;
@@ -109,6 +133,68 @@ export function useFortuneCookie(): FortuneCookieHook {
     );
     return () => clearInterval(id);
   }, []);
+
+  const refreshBalances = useCallback(async () => {
+    if (!activePubkey) {
+      setPrepaidBalanceLamports(0);
+      setTreasuryLamports(0);
+      return;
+    }
+    try {
+      const [b, t] = await Promise.all([
+        getPrepaidBalanceLamports(connection, activePubkey, PROGRAM_ID),
+        getTreasuryLamports(connection, PROGRAM_ID),
+      ]);
+      setPrepaidBalanceLamports(b);
+      setTreasuryLamports(t);
+    } catch (err) {
+      console.warn('refreshBalances failed:', err);
+    }
+  }, [connection, activePubkey]);
+
+  useEffect(() => {
+    refreshBalances();
+    const id = setInterval(refreshBalances, 15_000);
+    return () => clearInterval(id);
+  }, [refreshBalances]);
+
+  const deposit = useCallback(
+    async (amountLamports: number) => {
+      if (!signerWallet) throw new Error('Wallet not connected');
+      setIsDepositing(true);
+      setError(null);
+      try {
+        await prepaidDeposit(connection, signerWallet, PROGRAM_ID, amountLamports);
+        await refreshBalances();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Deposit failed';
+        setError(msg);
+        throw err;
+      } finally {
+        setIsDepositing(false);
+      }
+    },
+    [connection, signerWallet, refreshBalances],
+  );
+
+  const withdraw = useCallback(
+    async (amountLamports: number) => {
+      if (!signerWallet) throw new Error('Wallet not connected');
+      setIsWithdrawing(true);
+      setError(null);
+      try {
+        await prepaidWithdraw(connection, signerWallet, PROGRAM_ID, amountLamports);
+        await refreshBalances();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Withdraw failed';
+        setError(msg);
+        throw err;
+      } finally {
+        setIsWithdrawing(false);
+      }
+    },
+    [connection, signerWallet, refreshBalances],
+  );
 
   const prepareSession = useCallback(
     async (batchSize: number = DEFAULT_BATCH_SIZE) => {
@@ -217,6 +303,23 @@ export function useFortuneCookie(): FortuneCookieHook {
 
       try {
         if (sessionKey && isSessionKeyValid(sessionKey)) {
+          // Prefer prepaid path when balance PDA can cover rent + fee.
+          if (prepaidBalanceLamports >= COST_PER_OPEN_ESTIMATE) {
+            const consumed = await openPrepaid(
+              connection,
+              sessionKey,
+              PROGRAM_ID,
+              archetype,
+            );
+            const refreshed = loadSessionKey(
+              new PublicKey(sessionKey.userPubkey),
+              PROGRAM_ID,
+            );
+            setSessionKey(refreshed);
+            await refreshBalances();
+            console.log('✅ Fortune recorded via prepaid balance', consumed);
+            return consumed.signature;
+          }
           const consumed = await openViaSession(
             connection,
             sessionKey,
@@ -228,7 +331,7 @@ export function useFortuneCookie(): FortuneCookieHook {
             PROGRAM_ID,
           );
           setSessionKey(refreshed);
-          console.log('✅ Fortune recorded via session key', consumed);
+          console.log('✅ Fortune recorded via session key (direct)', consumed);
           return consumed.signature;
         }
 
@@ -277,6 +380,8 @@ export function useFortuneCookie(): FortuneCookieHook {
       connection,
       session,
       sessionKey,
+      prepaidBalanceLamports,
+      refreshBalances,
       mode,
       localWallet,
       publicKey,
@@ -301,6 +406,16 @@ export function useFortuneCookie(): FortuneCookieHook {
     isAuthorizingSessionKey,
     authorizeSessionKey,
     revokeSessionKey,
+    prepaidBalanceLamports,
+    prepaidRemainingOpens: estimateRemainingOpens(prepaidBalanceLamports),
+    treasuryLamports,
+    isDepositing,
+    isWithdrawing,
+    deposit,
+    withdraw,
+    refreshBalances,
+    feeLamports: FEE_LAMPORTS,
+    costPerOpenLamports: COST_PER_OPEN_ESTIMATE,
   };
 }
 

@@ -150,6 +150,113 @@ export const IDL = {
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "deposit",
+      "accounts": [
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "balance",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "withdraw",
+      "accounts": [
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "balance",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "open_cookie_prepaid",
+      "accounts": [
+        {
+          "name": "session_key",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "user",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "session",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "balance",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "cookie",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "stats",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "archetype",
+          "type": "u8"
+        },
+        {
+          "name": "counter",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -264,6 +371,21 @@ export const IDL = {
         {
           "name": "expires_at",
           "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "FeeCollected",
+      "fields": [
+        {
+          "name": "user",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "amount",
+          "type": "u64",
           "index": false
         }
       ]

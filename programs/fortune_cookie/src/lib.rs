@@ -1,8 +1,14 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::{
+    program::{invoke, invoke_signed},
+    system_instruction,
+};
 
 declare_id!("DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85");
 
 const MAX_SESSION_DURATION: i64 = 60 * 60 * 24 * 30; // 30 days
+const FEE_LAMPORTS: u64 = 500_000; // 0.0005 SOL per open → treasury
+const COOKIE_SPACE: usize = 8 + 32 + 1 + 8 + 1 + 1;
 
 #[program]
 pub mod fortune_cookie {
@@ -111,6 +117,163 @@ pub mod fortune_cookie {
             rarity,
         });
 
+        Ok(())
+    }
+
+    /// Top up the user's prepaid balance PDA. System-owned account is auto-created
+    /// by the transfer if it didn't exist.
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        require!(amount > 0, ErrorCode::InvalidAmount);
+        let ix = system_instruction::transfer(
+            &ctx.accounts.user.key(),
+            &ctx.accounts.balance.key(),
+            amount,
+        );
+        invoke(
+            &ix,
+            &[
+                ctx.accounts.user.to_account_info(),
+                ctx.accounts.balance.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Withdraw SOL from the user's balance PDA back to the user wallet.
+    /// Program signs on behalf of the PDA via its derivation seeds.
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        require!(amount > 0, ErrorCode::InvalidAmount);
+        require!(
+            ctx.accounts.balance.lamports() >= amount,
+            ErrorCode::InsufficientBalance
+        );
+
+        let user_key = ctx.accounts.user.key();
+        let bump = ctx.bumps.balance;
+        let seeds: &[&[u8]] = &[user_key.as_ref(), b"balance", &[bump]];
+
+        let ix = system_instruction::transfer(
+            &ctx.accounts.balance.key(),
+            &ctx.accounts.user.key(),
+            amount,
+        );
+        invoke_signed(
+            &ix,
+            &[
+                ctx.accounts.balance.to_account_info(),
+                ctx.accounts.user.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            &[seeds],
+        )?;
+        Ok(())
+    }
+
+    /// Open a cookie paid from the user's prepaid balance PDA.
+    ///
+    /// - Session key signs (authorization + tx base fee).
+    /// - Balance PDA funds the cookie account's rent AND pays FEE_LAMPORTS to the
+    ///   treasury PDA, both via program-signed CPIs.
+    /// - Cookie account is created manually because its funder (balance PDA) is
+    ///   not a transaction-level signer.
+    pub fn open_cookie_prepaid(
+        ctx: Context<OpenCookiePrepaid>,
+        archetype: u8,
+        counter: u64,
+    ) -> Result<()> {
+        require!(archetype < 4, ErrorCode::InvalidArchetype);
+
+        let clock = Clock::get()?;
+        let session = &ctx.accounts.session;
+        require!(
+            clock.unix_timestamp < session.expires_at,
+            ErrorCode::SessionExpired
+        );
+
+        let user_key = session.user;
+        let rent = Rent::get()?.minimum_balance(COOKIE_SPACE);
+        let total_debit = rent
+            .checked_add(FEE_LAMPORTS)
+            .ok_or(ErrorCode::Overflow)?;
+
+        require!(
+            ctx.accounts.balance.lamports() >= total_debit,
+            ErrorCode::InsufficientBalance
+        );
+
+        let balance_bump = ctx.bumps.balance;
+        let balance_seeds: &[&[u8]] = &[user_key.as_ref(), b"balance", &[balance_bump]];
+
+        // 1) Fee: balance PDA → treasury PDA
+        let fee_ix = system_instruction::transfer(
+            &ctx.accounts.balance.key(),
+            &ctx.accounts.treasury.key(),
+            FEE_LAMPORTS,
+        );
+        invoke_signed(
+            &fee_ix,
+            &[
+                ctx.accounts.balance.to_account_info(),
+                ctx.accounts.treasury.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            &[balance_seeds],
+        )?;
+
+        // 2) Create cookie account funded by balance PDA.
+        let cookie_bump = ctx.bumps.cookie;
+        let counter_bytes = counter.to_le_bytes();
+        let cookie_seeds: &[&[u8]] = &[
+            user_key.as_ref(),
+            b"cookie",
+            counter_bytes.as_ref(),
+            &[cookie_bump],
+        ];
+
+        let create_ix = system_instruction::create_account(
+            &ctx.accounts.balance.key(),
+            &ctx.accounts.cookie.key(),
+            rent,
+            COOKIE_SPACE as u64,
+            ctx.program_id,
+        );
+        invoke_signed(
+            &create_ix,
+            &[
+                ctx.accounts.balance.to_account_info(),
+                ctx.accounts.cookie.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            &[balance_seeds, cookie_seeds],
+        )?;
+
+        // 3) Populate cookie data (anchor discriminator + fields).
+        let (fortune_id, rarity) = derive_fortune(&clock, &user_key, archetype, counter);
+        let cookie = FortuneCookie {
+            user: user_key,
+            archetype,
+            fortune_id,
+            rarity,
+            bump: cookie_bump,
+        };
+        let cookie_info = ctx.accounts.cookie.to_account_info();
+        let mut data = cookie_info.try_borrow_mut_data()?;
+        let mut writer: &mut [u8] = &mut data;
+        cookie.try_serialize(&mut writer)?;
+
+        ctx.accounts.stats.total_opens += 1;
+
+        emit!(CookieOpened {
+            user: user_key,
+            archetype,
+            fortune_id,
+            rarity,
+        });
+        emit!(FeeCollected {
+            user: user_key,
+            amount: FEE_LAMPORTS,
+        });
         Ok(())
     }
 }
@@ -227,6 +390,90 @@ pub struct RevokeSession<'info> {
 }
 
 #[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [user.key().as_ref(), b"balance"],
+        bump
+    )]
+    pub balance: SystemAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [user.key().as_ref(), b"balance"],
+        bump
+    )]
+    pub balance: SystemAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(archetype: u8, counter: u64)]
+pub struct OpenCookiePrepaid<'info> {
+    /// Ephemeral browser-held key. Pays the tx base fee only (~5000 lamports).
+    #[account(mut)]
+    pub session_key: Signer<'info>,
+
+    /// CHECK: session owner; verified by `has_one = user` on session.
+    pub user: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [user.key().as_ref(), b"session"],
+        bump = session.bump,
+        has_one = user,
+        constraint = session.session_key == session_key.key()
+            @ ErrorCode::UnauthorizedSessionKey
+    )]
+    pub session: Account<'info, Session>,
+
+    /// User's prepaid balance PDA. Funds cookie rent + fee.
+    #[account(
+        mut,
+        seeds = [user.key().as_ref(), b"balance"],
+        bump
+    )]
+    pub balance: SystemAccount<'info>,
+
+    /// CHECK: global treasury PDA. Receives FEE_LAMPORTS per open.
+    #[account(
+        mut,
+        seeds = [b"treasury"],
+        bump
+    )]
+    pub treasury: SystemAccount<'info>,
+
+    /// CHECK: cookie account is created manually via invoke_signed inside the
+    /// instruction because its funder (balance PDA) is not a tx-level signer.
+    #[account(
+        mut,
+        seeds = [user.key().as_ref(), b"cookie", counter.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub cookie: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"stats"],
+        bump = stats.bump
+    )]
+    pub stats: Account<'info, Stats>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 #[instruction(archetype: u8, counter: u64)]
 pub struct OpenCookieViaSession<'info> {
     /// Ephemeral browser-held key. Pays fees + cookie rent.
@@ -304,6 +551,12 @@ pub struct SessionAuthorized {
     pub expires_at: i64,
 }
 
+#[event]
+pub struct FeeCollected {
+    pub user: Pubkey,
+    pub amount: u64,
+}
+
 #[error_code]
 pub enum ErrorCode {
     #[msg("Invalid archetype (must be 0-3)")]
@@ -314,4 +567,10 @@ pub enum ErrorCode {
     UnauthorizedSessionKey,
     #[msg("Duration must be > 0 and <= 30 days")]
     InvalidDuration,
+    #[msg("Amount must be > 0")]
+    InvalidAmount,
+    #[msg("Insufficient prepaid balance")]
+    InsufficientBalance,
+    #[msg("Arithmetic overflow")]
+    Overflow,
 }
