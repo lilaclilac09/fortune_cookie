@@ -21,6 +21,33 @@ pub mod fortune_cookie {
         Ok(())
     }
 
+    /// One-time global initialization: funds the treasury PDA with the
+    /// rent-exempt minimum so subsequent fee transfers (smaller than rent)
+    /// don't violate the post-tx rent check. Idempotent: if treasury is
+    /// already rent-exempt this is a no-op.
+    pub fn initialize_treasury(ctx: Context<InitializeTreasury>) -> Result<()> {
+        let rent_min = Rent::get()?.minimum_balance(0);
+        let current = ctx.accounts.treasury.lamports();
+        if current >= rent_min {
+            return Ok(());
+        }
+        let needed = rent_min - current;
+        let ix = system_instruction::transfer(
+            &ctx.accounts.payer.key(),
+            &ctx.accounts.treasury.key(),
+            needed,
+        );
+        invoke(
+            &ix,
+            &[
+                ctx.accounts.payer.to_account_info(),
+                ctx.accounts.treasury.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn open_cookie(ctx: Context<OpenCookie>, archetype: u8, counter: u64) -> Result<()> {
         require!(archetype < 4, ErrorCode::InvalidArchetype);
 
@@ -313,6 +340,21 @@ fn derive_fortune(
     };
 
     (fortune_id, rarity)
+}
+
+#[derive(Accounts)]
+pub struct InitializeTreasury<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"treasury"],
+        bump
+    )]
+    pub treasury: SystemAccount<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

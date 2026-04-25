@@ -102,8 +102,26 @@ export async function deposit(
   if (amountLamports <= 0) throw new Error('Amount must be > 0');
   const program = makeProgram(connection, wallet, programId);
   const [balancePda] = deriveBalancePda(wallet.publicKey, programId);
+  const [treasuryPda] = deriveTreasuryPda(programId);
 
-  const ix = await program.methods
+  const tx = new Transaction();
+
+  // First deposit anywhere needs to seed the treasury PDA so subsequent
+  // sub-rent-exempt fee transfers don't violate the post-tx rent check.
+  const treasuryLamports = await connection.getBalance(treasuryPda, 'confirmed');
+  if (treasuryLamports < 890_880) {
+    const initTreasuryIx = await program.methods
+      .initializeTreasury()
+      .accounts({
+        payer: wallet.publicKey,
+        treasury: treasuryPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    tx.add(initTreasuryIx);
+  }
+
+  const depositIx = await program.methods
     .deposit(new anchor.BN(amountLamports))
     .accounts({
       user: wallet.publicKey,
@@ -111,8 +129,8 @@ export async function deposit(
       systemProgram: SystemProgram.programId,
     })
     .instruction();
+  tx.add(depositIx);
 
-  const tx = new Transaction().add(ix);
   const latest = await connection.getLatestBlockhash('confirmed');
   tx.feePayer = wallet.publicKey;
   tx.recentBlockhash = latest.blockhash;

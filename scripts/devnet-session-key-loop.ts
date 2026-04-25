@@ -44,7 +44,65 @@ const SESSION_DURATION_SEC = Number(process.env.DURATION ?? "3600");
 const SESSION_FUNDING = Number(process.env.FUNDING_LAMPORTS ?? String(50_000_000)); // 0.05 SOL
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { IDL } = require(path.resolve(__dirname, "../app/src/hooks/fortune_cookie_idl"));
+const { IDL: RAW_IDL } = require(path.resolve(__dirname, "../app/src/hooks/fortune_cookie_idl"));
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const crypto = require("crypto");
+
+function disc(ns: string, name: string): number[] {
+  return Array.from(
+    crypto.createHash("sha256").update(`${ns}:${name}`).digest().slice(0, 8),
+  );
+}
+function convertType(t: any): any {
+  if (t === "publicKey") return "pubkey";
+  if (typeof t === "object" && t !== null) {
+    const o: any = {};
+    for (const [k, v] of Object.entries(t)) o[k] = convertType(v);
+    return o;
+  }
+  return t;
+}
+function convertFields(fields: any[]): any[] {
+  return fields.map((f: any) => ({ ...f, type: convertType(f.type) }));
+}
+function convertAccount(a: any): any {
+  const o: any = { name: a.name };
+  if (a.isMut || a.writable) o.writable = true;
+  if (a.isSigner || a.signer) o.signer = true;
+  if (a.address) o.address = a.address;
+  if (a.pda) o.pda = a.pda;
+  if (a.optional) o.optional = true;
+  return o;
+}
+const IDL = {
+  ...RAW_IDL,
+  address: PROGRAM_ID.toBase58(),
+  instructions: RAW_IDL.instructions.map((ix: any) => ({
+    ...ix,
+    discriminator: disc("global", ix.name),
+    accounts: (ix.accounts ?? []).map(convertAccount),
+    args: convertFields(ix.args ?? []),
+  })),
+  accounts: (RAW_IDL.accounts ?? []).map((a: any) => ({
+    name: a.name,
+    discriminator: disc("account", a.name),
+  })),
+  types: [
+    ...(RAW_IDL.types ?? []),
+    ...(RAW_IDL.accounts ?? []).map((a: any) => ({
+      name: a.name,
+      type: { ...a.type, fields: convertFields(a.type?.fields ?? []) },
+    })),
+    ...(RAW_IDL.events ?? []).map((e: any) => ({
+      name: e.name,
+      type: { kind: "struct", fields: convertFields(e.fields ?? []) },
+    })),
+  ],
+  events: RAW_IDL.events?.map((e: any) => ({
+    name: e.name,
+    discriminator: disc("event", e.name),
+  })),
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -149,7 +207,7 @@ async function main() {
     wallet as unknown as anchor.Wallet,
     { commitment: "confirmed" },
   );
-  const program = new anchor.Program(IDL as any, PROGRAM_ID, provider);
+  const program = new anchor.Program(IDL as any, provider as any);
 
   const statsPda = deriveStatsPda();
   const sessionPda = deriveSessionPda(user.publicKey);

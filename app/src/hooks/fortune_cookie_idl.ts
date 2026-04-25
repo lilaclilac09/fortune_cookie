@@ -26,6 +26,27 @@ export const IDL = {
       "args": []
     },
     {
+      "name": "initialize_treasury",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "open_cookie",
       "accounts": [
         {

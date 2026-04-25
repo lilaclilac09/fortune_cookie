@@ -43,7 +43,69 @@ const SESSION_FUNDING_LAMPORTS = Number(
 const FEE_LAMPORTS = 500_000;
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { IDL } = require(path.resolve(__dirname, "../app/src/hooks/fortune_cookie_idl"));
+const { IDL: RAW_IDL } = require(path.resolve(__dirname, "../app/src/hooks/fortune_cookie_idl"));
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const crypto = require("crypto");
+
+// Convert the hand-maintained Anchor 0.29-style IDL to the 0.30+ shape that
+// the installed anchor client expects (address field, instruction
+// discriminators, writable/signer flag rename, event types in `types[]`).
+function disc(ns: string, name: string): number[] {
+  return Array.from(
+    crypto.createHash("sha256").update(`${ns}:${name}`).digest().slice(0, 8),
+  );
+}
+function convertType(t: any): any {
+  if (t === "publicKey") return "pubkey";
+  if (typeof t === "object" && t !== null) {
+    const o: any = {};
+    for (const [k, v] of Object.entries(t)) o[k] = convertType(v);
+    return o;
+  }
+  return t;
+}
+function convertFields(fields: any[]): any[] {
+  return fields.map((f: any) => ({ ...f, type: convertType(f.type) }));
+}
+function convertAccount(acc: any): any {
+  const o: any = { name: acc.name };
+  if (acc.isMut || acc.writable) o.writable = true;
+  if (acc.isSigner || acc.signer) o.signer = true;
+  if (acc.address) o.address = acc.address;
+  if (acc.pda) o.pda = acc.pda;
+  if (acc.optional) o.optional = true;
+  return o;
+}
+function buildIdl(idl: any): any {
+  const accountTypes = (idl.accounts ?? []).map((a: any) => ({
+    name: a.name,
+    type: { ...a.type, fields: convertFields(a.type?.fields ?? []) },
+  }));
+  const eventTypes = (idl.events ?? []).map((e: any) => ({
+    name: e.name,
+    type: { kind: "struct", fields: convertFields(e.fields ?? []) },
+  }));
+  return {
+    ...idl,
+    address: PROGRAM_ID.toBase58(),
+    instructions: idl.instructions.map((ix: any) => ({
+      ...ix,
+      discriminator: disc("global", ix.name),
+      accounts: (ix.accounts ?? []).map(convertAccount),
+      args: convertFields(ix.args ?? []),
+    })),
+    accounts: (idl.accounts ?? []).map((a: any) => ({
+      name: a.name,
+      discriminator: disc("account", a.name),
+    })),
+    types: [...(idl.types ?? []), ...accountTypes, ...eventTypes],
+    events: idl.events?.map((e: any) => ({
+      name: e.name,
+      discriminator: disc("event", e.name),
+    })),
+  };
+}
+const IDL = buildIdl(RAW_IDL);
 
 const explorerTx = (s: string) =>
   `https://explorer.solana.com/tx/${s}?cluster=${CLUSTER_LABEL}`;
@@ -108,7 +170,7 @@ async function main() {
     wallet as unknown as anchor.Wallet,
     { commitment: "confirmed" },
   );
-  const program = new anchor.Program(IDL as any, PROGRAM_ID, provider);
+  const program = new anchor.Program(IDL as any, provider as any);
 
   const [statsPda] = PublicKey.findProgramAddressSync(
     [Buffer.from("stats")],
@@ -136,6 +198,21 @@ async function main() {
       .accounts({
         payer: user.publicKey,
         stats: statsPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+    console.log(`   ✓ ${explorerTx(sig)}`);
+  }
+
+  // ── Step 1b: initialize_treasury (idempotent: tops up to rent-exempt min) ──
+  const treasuryInfo = await conn.getAccountInfo(treasuryPda);
+  if (!treasuryInfo || treasuryInfo.lamports < 890_880) {
+    console.log(`\n📝 Funding treasury PDA to rent-exempt minimum …`);
+    const sig = await program.methods
+      .initializeTreasury()
+      .accounts({
+        payer: user.publicKey,
+        treasury: treasuryPda,
         systemProgram: SystemProgram.programId,
       })
       .rpc();

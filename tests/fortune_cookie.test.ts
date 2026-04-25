@@ -61,6 +61,17 @@ function convertFields(fields: any[]): any[] {
  *
  * The original IDL object is NOT mutated.
  */
+function convertAccount(acc: any): any {
+  // Anchor 0.30+ renamed instruction-account flags: isMut → writable, isSigner → signer.
+  const out: any = { name: acc.name };
+  if (acc.isMut || acc.writable) out.writable = true;
+  if (acc.isSigner || acc.signer) out.signer = true;
+  if (acc.address) out.address = acc.address;
+  if (acc.pda) out.pda = acc.pda;
+  if (acc.optional) out.optional = true;
+  return out;
+}
+
 function addDiscriminators(idl: any): any {
   // Promote account type definitions to top-level `types`, converting field types
   const accountTypes = (idl.accounts ?? []).map((acc: any) => ({
@@ -71,23 +82,35 @@ function addDiscriminators(idl: any): any {
     },
   }));
 
+  // Anchor 0.30+ also expects each event to have a corresponding entry in `types`
+  // (struct kind) so the BorshEventCoder can deserialize it.
+  const eventTypes = (idl.events ?? []).map((ev: any) => ({
+    name: ev.name,
+    type: {
+      kind: "struct",
+      fields: convertFields(
+        (ev.fields ?? []).map((f: any) => ({ name: f.name, type: f.type })),
+      ),
+    },
+  }));
+
   return {
     ...idl,
     address: PROGRAM_ID.toBase58(),
     instructions: idl.instructions.map((ix: any) => ({
       ...ix,
       discriminator: disc("global", ix.name),
+      accounts: (ix.accounts ?? []).map(convertAccount),
       args: convertFields(ix.args ?? []),
     })),
     accounts: (idl.accounts ?? []).map((acc: any) => ({
       name: acc.name,
       discriminator: disc("account", acc.name),
     })),
-    types: [...(idl.types ?? []), ...accountTypes],
+    types: [...(idl.types ?? []), ...accountTypes, ...eventTypes],
     events: idl.events?.map((ev: any) => ({
-      ...ev,
+      name: ev.name,
       discriminator: disc("event", ev.name),
-      fields: convertFields(ev.fields ?? []),
     })),
   };
 }
@@ -133,6 +156,7 @@ function treasuryPda(): [PublicKey, number] {
 describe("fortune_cookie (bankrun)", () => {
   let program: any;
   let payer: Keypair;
+  let getBalance: (pk: PublicKey) => Promise<number>;
 
   before(async () => {
     const context = await startAnchor(
@@ -144,6 +168,10 @@ describe("fortune_cookie (bankrun)", () => {
     const provider = new BankrunProvider(context);
     anchor.setProvider(provider as any);
     program = new Program(IDL30, provider as any);
+    getBalance = async (pk: PublicKey) => {
+      const lamports = await context.banksClient.getBalance(pk);
+      return Number(lamports);
+    };
   });
 
   // ── initialize_stats ────────────────────────────────────────────────────
@@ -600,6 +628,16 @@ describe("fortune_cookie (bankrun)", () => {
       .signers([user])
       .rpc();
 
+    // 1b. Initialize treasury (idempotent, funds rent-exempt minimum)
+    await program.methods
+      .initializeTreasury()
+      .accounts({
+        payer: payer.publicKey,
+        treasury: treasuryAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
     // 2. Deposit 0.05 SOL into balance PDA
     const depositLamports = 50_000_000;
     await program.methods
@@ -612,11 +650,13 @@ describe("fortune_cookie (bankrun)", () => {
       .signers([user])
       .rpc();
 
-    const balanceAfterDeposit = await program.provider.connection.getBalance(balanceAccount);
+    const balanceAfterDeposit = await getBalance(balanceAccount);
+    console.log(`  [debug] balance PDA after deposit: ${balanceAfterDeposit} lamports (expected ${depositLamports})`);
     assert.equal(balanceAfterDeposit, depositLamports, "balance PDA should hold deposited amount");
 
     // 3. Open 3 cookies via prepaid — session key signs, user does NOT
-    const treasuryBefore = await program.provider.connection.getBalance(treasuryAccount);
+    const treasuryBefore = await getBalance(treasuryAccount);
+    console.log(`  [debug] treasury before: ${treasuryBefore} lamports`);
     const N = 3;
     for (let i = 0; i < N; i++) {
       const counter = new BN(77000 + i);
@@ -644,7 +684,7 @@ describe("fortune_cookie (bankrun)", () => {
     }
 
     // Treasury gained exactly N * 500_000 lamports
-    const treasuryAfter = await program.provider.connection.getBalance(treasuryAccount);
+    const treasuryAfter = await getBalance(treasuryAccount);
     assert.equal(
       treasuryAfter - treasuryBefore,
       N * 500_000,
@@ -652,7 +692,7 @@ describe("fortune_cookie (bankrun)", () => {
     );
 
     // Balance PDA drained by N * (rent + fee); should still have some left
-    const balanceAfter = await program.provider.connection.getBalance(balanceAccount);
+    const balanceAfter = await getBalance(balanceAccount);
     assert.ok(
       balanceAfter < balanceAfterDeposit,
       "balance PDA should be debited for rent + fee per open"
@@ -754,7 +794,7 @@ describe("fortune_cookie (bankrun)", () => {
       .signers([user])
       .rpc();
 
-    const userBefore = await program.provider.connection.getBalance(user.publicKey);
+    const userBefore = await getBalance(user.publicKey);
     const withdrawAmount = 30_000_000;
     await program.methods
       .withdraw(new BN(withdrawAmount))
@@ -766,8 +806,8 @@ describe("fortune_cookie (bankrun)", () => {
       .signers([user])
       .rpc();
 
-    const userAfter = await program.provider.connection.getBalance(user.publicKey);
-    const balanceAfter = await program.provider.connection.getBalance(balanceAccount);
+    const userAfter = await getBalance(user.publicKey);
+    const balanceAfter = await getBalance(balanceAccount);
 
     // User got back withdrawAmount minus the tx fee paid
     assert.ok(

@@ -5,9 +5,9 @@
   "type": "commonjs",
   "scripts": {
     "test": "mocha --import=tsx --timeout 60000 '*.test.ts'",
-    "e2e:live": "tsx ../scripts/devnet-live-loop.ts",
-    "e2e:session": "tsx ../scripts/devnet-session-key-loop.ts",
-    "e2e:prepaid": "tsx ../scripts/devnet-deposit-and-loop.ts"
+    "e2e:live": "NODE_PATH=$PWD/node_modules tsx ../scripts/devnet-live-loop.ts",
+    "e2e:session": "NODE_PATH=$PWD/node_modules tsx ../scripts/devnet-session-key-loop.ts",
+    "e2e:prepaid": "NODE_PATH=$PWD/node_modules tsx ../scripts/devnet-deposit-and-loop.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.30.1",
