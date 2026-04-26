@@ -58,6 +58,29 @@ export function deriveTreasuryPda(
   );
 }
 
+export function deriveTreasuryConfigPda(
+  programId: PublicKey,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('treasury_config')],
+    programId,
+  );
+}
+
+/**
+ * Read the treasury authority pubkey from chain.
+ * Returns null if treasury_config hasn't been initialized yet.
+ */
+export async function getTreasuryAuthority(
+  connection: Connection,
+  programId: PublicKey,
+): Promise<PublicKey | null> {
+  const [pda] = deriveTreasuryConfigPda(programId);
+  const info = await connection.getAccountInfo(pda, 'confirmed');
+  if (!info) return null;
+  return new PublicKey(info.data.subarray(8, 40));
+}
+
 export async function getPrepaidBalanceLamports(
   connection: Connection,
   user: PublicKey,
@@ -309,4 +332,84 @@ export async function openPrepaid(
 
 export function lamportsToSol(lamports: number): string {
   return (lamports / LAMPORTS_PER_SOL).toFixed(4);
+}
+
+export async function collectTreasury(
+  connection: Connection,
+  wallet: SignerWallet,
+  programId: PublicKey,
+  amountLamports: number,
+  recipient: PublicKey,
+): Promise<string> {
+  if (amountLamports <= 0) throw new Error('Amount must be > 0');
+  const program = makeProgram(connection, wallet, programId);
+  const [treasuryPda] = deriveTreasuryPda(programId);
+  const [treasuryConfigPda] = deriveTreasuryConfigPda(programId);
+
+  const ix = await program.methods
+    .collectTreasury(new anchor.BN(amountLamports))
+    .accounts({
+      authority: wallet.publicKey,
+      treasuryConfig: treasuryConfigPda,
+      treasury: treasuryPda,
+      recipient,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+
+  const tx = new Transaction().add(ix);
+  const latest = await connection.getLatestBlockhash('confirmed');
+  tx.feePayer = wallet.publicKey;
+  tx.recentBlockhash = latest.blockhash;
+  const signed = await wallet.signTransaction(tx);
+  const sig = await connection.sendRawTransaction(signed.serialize());
+  const conf = await connection.confirmTransaction(
+    {
+      signature: sig,
+      blockhash: latest.blockhash,
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+    },
+    'confirmed',
+  );
+  if (conf.value.err) {
+    throw new Error('collect_treasury failed: ' + JSON.stringify(conf.value.err));
+  }
+  return sig;
+}
+
+export async function closeCookie(
+  connection: Connection,
+  wallet: SignerWallet,
+  programId: PublicKey,
+  counter: bigint,
+): Promise<string> {
+  const program = makeProgram(connection, wallet, programId);
+  const cookiePda = deriveCookiePda(wallet.publicKey, counter, programId);
+
+  const ix = await program.methods
+    .closeCookie(new anchor.BN(counter.toString()))
+    .accounts({
+      user: wallet.publicKey,
+      cookie: cookiePda,
+    })
+    .instruction();
+
+  const tx = new Transaction().add(ix);
+  const latest = await connection.getLatestBlockhash('confirmed');
+  tx.feePayer = wallet.publicKey;
+  tx.recentBlockhash = latest.blockhash;
+  const signed = await wallet.signTransaction(tx);
+  const sig = await connection.sendRawTransaction(signed.serialize());
+  const conf = await connection.confirmTransaction(
+    {
+      signature: sig,
+      blockhash: latest.blockhash,
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+    },
+    'confirmed',
+  );
+  if (conf.value.err) {
+    throw new Error('close_cookie failed: ' + JSON.stringify(conf.value.err));
+  }
+  return sig;
 }

@@ -22,29 +22,77 @@ pub mod fortune_cookie {
     }
 
     /// One-time global initialization: funds the treasury PDA with the
-    /// rent-exempt minimum so subsequent fee transfers (smaller than rent)
-    /// don't violate the post-tx rent check. Idempotent: if treasury is
-    /// already rent-exempt this is a no-op.
+    /// rent-exempt minimum AND records the calling payer as the treasury's
+    /// withdraw authority in a sibling config PDA. Idempotent: subsequent
+    /// calls only top up the bucket if it dipped below rent-exempt; the
+    /// authority cannot be overwritten.
     pub fn initialize_treasury(ctx: Context<InitializeTreasury>) -> Result<()> {
         let rent_min = Rent::get()?.minimum_balance(0);
         let current = ctx.accounts.treasury.lamports();
-        if current >= rent_min {
-            return Ok(());
+        if current < rent_min {
+            let needed = rent_min - current;
+            let ix = system_instruction::transfer(
+                &ctx.accounts.payer.key(),
+                &ctx.accounts.treasury.key(),
+                needed,
+            );
+            invoke(
+                &ix,
+                &[
+                    ctx.accounts.payer.to_account_info(),
+                    ctx.accounts.treasury.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+            )?;
         }
-        let needed = rent_min - current;
-        let ix = system_instruction::transfer(
-            &ctx.accounts.payer.key(),
-            &ctx.accounts.treasury.key(),
-            needed,
+
+        let cfg = &mut ctx.accounts.treasury_config;
+        // Anchor's `init_if_needed` ran the discriminator + zero-init; only
+        // overwrite the authority on first init so a later caller can't
+        // hijack treasury control.
+        if cfg.authority == Pubkey::default() {
+            cfg.authority = ctx.accounts.payer.key();
+            cfg.bump = ctx.bumps.treasury_config;
+        }
+        Ok(())
+    }
+
+    /// Withdraw collected fees from the treasury PDA to an arbitrary recipient.
+    /// Must be signed by the authority recorded in `TreasuryConfig` (set on
+    /// the first `initialize_treasury` call). Treasury stays above rent.
+    pub fn collect_treasury(ctx: Context<CollectTreasury>, amount: u64) -> Result<()> {
+        require!(amount > 0, ErrorCode::InvalidAmount);
+        let rent_min = Rent::get()?.minimum_balance(0);
+        let current = ctx.accounts.treasury.lamports();
+        require!(
+            current.saturating_sub(amount) >= rent_min,
+            ErrorCode::InsufficientBalance
         );
-        invoke(
+
+        let bump = ctx.bumps.treasury;
+        let seeds: &[&[u8]] = &[b"treasury", &[bump]];
+        let ix = system_instruction::transfer(
+            &ctx.accounts.treasury.key(),
+            &ctx.accounts.recipient.key(),
+            amount,
+        );
+        invoke_signed(
             &ix,
             &[
-                ctx.accounts.payer.to_account_info(),
                 ctx.accounts.treasury.to_account_info(),
+                ctx.accounts.recipient.to_account_info(),
                 ctx.accounts.system_program.to_account_info(),
             ],
+            &[seeds],
         )?;
+        Ok(())
+    }
+
+    /// Close a cookie PDA and refund its rent to the cookie's owner. The
+    /// `has_one = user` constraint plus seeded PDA derivation enforces that
+    /// only the cookie's actual owner can call this.
+    pub fn close_cookie(_ctx: Context<CloseCookie>, counter: u64) -> Result<()> {
+        let _ = counter; // referenced by the accounts struct's seeds
         Ok(())
     }
 
@@ -354,7 +402,58 @@ pub struct InitializeTreasury<'info> {
     )]
     pub treasury: SystemAccount<'info>,
 
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + 32 + 1,
+        seeds = [b"treasury_config"],
+        bump
+    )]
+    pub treasury_config: Account<'info, TreasuryConfig>,
+
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CollectTreasury<'info> {
+    pub authority: Signer<'info>,
+
+    #[account(
+        seeds = [b"treasury_config"],
+        bump = treasury_config.bump,
+        constraint = treasury_config.authority == authority.key()
+            @ ErrorCode::UnauthorizedTreasuryWithdraw
+    )]
+    pub treasury_config: Account<'info, TreasuryConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"treasury"],
+        bump
+    )]
+    pub treasury: SystemAccount<'info>,
+
+    /// CHECK: arbitrary recipient — the authority chooses where fees go.
+    #[account(mut)]
+    pub recipient: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(counter: u64)]
+pub struct CloseCookie<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        close = user,
+        seeds = [user.key().as_ref(), b"cookie", counter.to_le_bytes().as_ref()],
+        bump = cookie.bump,
+        has_one = user
+    )]
+    pub cookie: Account<'info, FortuneCookie>,
 }
 
 #[derive(Accounts)]
@@ -578,6 +677,12 @@ pub struct Session {
     pub bump: u8,
 }
 
+#[account]
+pub struct TreasuryConfig {
+    pub authority: Pubkey,
+    pub bump: u8,
+}
+
 #[event]
 pub struct CookieOpened {
     pub user: Pubkey,
@@ -615,4 +720,6 @@ pub enum ErrorCode {
     InsufficientBalance,
     #[msg("Arithmetic overflow")]
     Overflow,
+    #[msg("Caller is not the treasury authority")]
+    UnauthorizedTreasuryWithdraw,
 }

@@ -151,6 +151,13 @@ function treasuryPda(): [PublicKey, number] {
   );
 }
 
+function treasuryConfigPda(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("treasury_config")],
+    PROGRAM_ID
+  );
+}
+
 // ── Test suite ───────────────────────────────────────────────────────────────
 
 describe("fortune_cookie (bankrun)", () => {
@@ -629,11 +636,13 @@ describe("fortune_cookie (bankrun)", () => {
       .rpc();
 
     // 1b. Initialize treasury (idempotent, funds rent-exempt minimum)
+    const [treasuryConfigAccount] = treasuryConfigPda();
     await program.methods
       .initializeTreasury()
       .accounts({
         payer: payer.publicKey,
         treasury: treasuryAccount,
+        treasuryConfig: treasuryConfigAccount,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
@@ -861,6 +870,226 @@ describe("fortune_cookie (bankrun)", () => {
     } catch (err: any) {
       // Expected: account not found or zero-length
       assert.ok(err, "Expected session to be closed");
+    }
+  });
+
+  // ── collect_treasury ────────────────────────────────────────────────────
+
+  it("collect_treasury moves SOL to recipient when called by authority", async () => {
+    const [treasuryAccount] = treasuryPda();
+    const [treasuryConfigAccount] = treasuryConfigPda();
+    const before = await getBalance(treasuryAccount);
+
+    const cfg = await program.account.treasuryConfig.fetch(treasuryConfigAccount);
+    assert.ok(cfg.authority.equals(payer.publicKey), "authority should be initial payer");
+
+    // Recipient must be pre-funded so post-tx rent check doesn't fail on it.
+    const recipient = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: recipient.publicKey,
+          lamports: 1_000_000_000,
+        })
+      ),
+      [payer]
+    );
+    const recipientBefore = await getBalance(recipient.publicKey);
+
+    const rentMin = 890_880;
+    const available = before - rentMin;
+    assert.ok(available > 0, "treasury must have collected fees by now");
+    const half = Math.floor(available / 2);
+
+    await program.methods
+      .collectTreasury(new BN(half))
+      .accounts({
+        authority: payer.publicKey,
+        treasuryConfig: treasuryConfigAccount,
+        treasury: treasuryAccount,
+        recipient: recipient.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([payer])
+      .rpc();
+
+    const after = await getBalance(treasuryAccount);
+    const recipientAfter = await getBalance(recipient.publicKey);
+    assert.equal(after, before - half, "treasury debited exactly `amount`");
+    assert.equal(recipientAfter - recipientBefore, half, "recipient credited exactly `amount`");
+  });
+
+  it("collect_treasury rejects non-authority signer", async () => {
+    const [treasuryAccount] = treasuryPda();
+    const [treasuryConfigAccount] = treasuryConfigPda();
+    const imposter = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: imposter.publicKey,
+          lamports: 50_000_000,
+        })
+      ),
+      [payer]
+    );
+
+    try {
+      await program.methods
+        .collectTreasury(new BN(100))
+        .accounts({
+          authority: imposter.publicKey,
+          treasuryConfig: treasuryConfigAccount,
+          treasury: treasuryAccount,
+          recipient: imposter.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([imposter])
+        .rpc();
+      assert.fail("Expected UnauthorizedTreasuryWithdraw");
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      assert.ok(
+        msg.includes("UnauthorizedTreasuryWithdraw") ||
+          msg.includes("6007") ||
+          msg.includes("1777"),
+        `Expected UnauthorizedTreasuryWithdraw, got: ${msg}`
+      );
+    }
+  });
+
+  it("collect_treasury refuses to drop treasury below rent-exempt minimum", async () => {
+    const [treasuryAccount] = treasuryPda();
+    const [treasuryConfigAccount] = treasuryConfigPda();
+    const current = await getBalance(treasuryAccount);
+    const recipient = Keypair.generate();
+
+    try {
+      await program.methods
+        .collectTreasury(new BN(current))
+        .accounts({
+          authority: payer.publicKey,
+          treasuryConfig: treasuryConfigAccount,
+          treasury: treasuryAccount,
+          recipient: recipient.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([payer])
+        .rpc();
+      assert.fail("Expected InsufficientBalance");
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      assert.ok(
+        msg.includes("InsufficientBalance") ||
+          msg.includes("6005") ||
+          msg.includes("1775"),
+        `Expected InsufficientBalance, got: ${msg}`
+      );
+    }
+  });
+
+  // ── close_cookie ────────────────────────────────────────────────────────
+
+  it("close_cookie refunds the cookie's rent to the user", async () => {
+    const user = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: user.publicKey,
+          lamports: 100_000_000,
+        })
+      ),
+      [payer]
+    );
+
+    const [statsAccount] = statsPda();
+    const counter = new BN(99001);
+    const [cookieAccount] = cookiePda(user.publicKey, counter);
+
+    await program.methods
+      .openCookie(0, counter)
+      .accounts({
+        user: user.publicKey,
+        cookie: cookieAccount,
+        stats: statsAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    const cookieRent = await getBalance(cookieAccount);
+    assert.ok(cookieRent > 0, "cookie should have rent locked");
+    const userBefore = await getBalance(user.publicKey);
+
+    await program.methods
+      .closeCookie(counter)
+      .accounts({
+        user: user.publicKey,
+        cookie: cookieAccount,
+      })
+      .signers([user])
+      .rpc();
+
+    const userAfter = await getBalance(user.publicKey);
+    const cookieAfter = await getBalance(cookieAccount);
+    assert.equal(cookieAfter, 0, "cookie account should be closed");
+    assert.ok(
+      userAfter - userBefore >= cookieRent - 10_000,
+      `user should reclaim ~${cookieRent} lamports, got ${userAfter - userBefore}`
+    );
+  });
+
+  it("close_cookie rejects when user does not match cookie.user", async () => {
+    const user = Keypair.generate();
+    const imposter = Keypair.generate();
+    const { Transaction } = require("@solana/web3.js");
+    await (program.provider as any).sendAndConfirm(
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: user.publicKey,
+          lamports: 100_000_000,
+        }),
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: imposter.publicKey,
+          lamports: 50_000_000,
+        })
+      ),
+      [payer]
+    );
+
+    const [statsAccount] = statsPda();
+    const counter = new BN(99002);
+    const [cookieAccount] = cookiePda(user.publicKey, counter);
+    await program.methods
+      .openCookie(0, counter)
+      .accounts({
+        user: user.publicKey,
+        cookie: cookieAccount,
+        stats: statsAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc();
+
+    try {
+      await program.methods
+        .closeCookie(counter)
+        .accounts({
+          user: imposter.publicKey,
+          cookie: cookieAccount,
+        })
+        .signers([imposter])
+        .rpc();
+      assert.fail("Expected close_cookie to be rejected for non-owner");
+    } catch (err: any) {
+      assert.ok(err, "Expected error");
     }
   });
 });

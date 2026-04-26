@@ -188,6 +188,10 @@ async function main() {
     [user.publicKey.toBuffer(), Buffer.from("session")],
     PROGRAM_ID,
   );
+  const [treasuryConfigPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("treasury_config")],
+    PROGRAM_ID,
+  );
 
   // ── Step 1: initialize_stats (idempotent) ──
   const statsInfo = await conn.getAccountInfo(statsPda);
@@ -204,15 +208,17 @@ async function main() {
     console.log(`   ✓ ${explorerTx(sig)}`);
   }
 
-  // ── Step 1b: initialize_treasury (idempotent: tops up to rent-exempt min) ──
+  // ── Step 1b: initialize_treasury (idempotent: tops up + sets authority) ──
   const treasuryInfo = await conn.getAccountInfo(treasuryPda);
-  if (!treasuryInfo || treasuryInfo.lamports < 890_880) {
-    console.log(`\n📝 Funding treasury PDA to rent-exempt minimum …`);
+  const treasuryConfigInfo = await conn.getAccountInfo(treasuryConfigPda);
+  if (!treasuryInfo || treasuryInfo.lamports < 890_880 || !treasuryConfigInfo) {
+    console.log(`\n📝 Initializing treasury (rent-exempt + authority=user) …`);
     const sig = await program.methods
       .initializeTreasury()
       .accounts({
         payer: user.publicKey,
         treasury: treasuryPda,
+        treasuryConfig: treasuryConfigPda,
         systemProgram: SystemProgram.programId,
       })
       .rpc();

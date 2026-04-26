@@ -7,7 +7,8 @@
     "test": "mocha --import=tsx --timeout 60000 '*.test.ts'",
     "e2e:live": "NODE_PATH=$PWD/node_modules tsx ../scripts/devnet-live-loop.ts",
     "e2e:session": "NODE_PATH=$PWD/node_modules tsx ../scripts/devnet-session-key-loop.ts",
-    "e2e:prepaid": "NODE_PATH=$PWD/node_modules tsx ../scripts/devnet-deposit-and-loop.ts"
+    "e2e:prepaid": "NODE_PATH=$PWD/node_modules tsx ../scripts/devnet-deposit-and-loop.ts",
+    "check:idl": "NODE_PATH=$PWD/node_modules tsx ../scripts/check-idl-alignment.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.30.1",

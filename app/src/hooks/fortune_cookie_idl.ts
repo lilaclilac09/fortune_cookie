@@ -39,12 +39,74 @@ export const IDL = {
           "isSigner": false
         },
         {
+          "name": "treasury_config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
           "name": "system_program",
           "isMut": false,
           "isSigner": false
         }
       ],
       "args": []
+    },
+    {
+      "name": "collect_treasury",
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "treasury_config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "treasury",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "recipient",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "system_program",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "close_cookie",
+      "accounts": [
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "cookie",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "counter",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "open_cookie",
@@ -341,6 +403,22 @@ export const IDL = {
           {
             "name": "expires_at",
             "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TreasuryConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "publicKey"
           },
           {
             "name": "bump",

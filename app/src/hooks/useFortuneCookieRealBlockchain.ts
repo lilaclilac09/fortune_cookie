@@ -26,11 +26,14 @@ import {
   StoredSessionKey,
 } from '@/lib/session-key';
 import {
+  closeCookie as prepaidCloseCookie,
+  collectTreasury as prepaidCollectTreasury,
   COST_PER_OPEN_ESTIMATE,
   deposit as prepaidDeposit,
   estimateRemainingOpens,
   FEE_LAMPORTS,
   getPrepaidBalanceLamports,
+  getTreasuryAuthority,
   getTreasuryLamports,
   openPrepaid,
   withdraw as prepaidWithdraw,
@@ -57,10 +60,15 @@ export interface FortuneCookieHook {
   prepaidBalanceLamports: number;
   prepaidRemainingOpens: number;
   treasuryLamports: number;
+  treasuryAuthority: PublicKey | null;
+  isTreasuryAuthority: boolean;
   isDepositing: boolean;
   isWithdrawing: boolean;
+  isCollectingTreasury: boolean;
   deposit: (amountLamports: number) => Promise<void>;
   withdraw: (amountLamports: number) => Promise<void>;
+  collectTreasury: (amountLamports: number, recipient: PublicKey) => Promise<void>;
+  closeCookie: (counter: bigint) => Promise<string>;
   refreshBalances: () => Promise<void>;
   feeLamports: number;
   costPerOpenLamports: number;
@@ -81,8 +89,10 @@ export function useFortuneCookie(): FortuneCookieHook {
   const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [prepaidBalanceLamports, setPrepaidBalanceLamports] = useState(0);
   const [treasuryLamports, setTreasuryLamports] = useState(0);
+  const [treasuryAuthority, setTreasuryAuthority] = useState<PublicKey | null>(null);
   const [isDepositing, setIsDepositing] = useState(false);
   const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [isCollectingTreasury, setIsCollectingTreasury] = useState(false);
 
   const activePubkey: PublicKey | null = useMemo(() => {
     if (mode === 'local' && localWallet) return localWallet.publicKey;
@@ -138,15 +148,18 @@ export function useFortuneCookie(): FortuneCookieHook {
     if (!activePubkey) {
       setPrepaidBalanceLamports(0);
       setTreasuryLamports(0);
+      setTreasuryAuthority(null);
       return;
     }
     try {
-      const [b, t] = await Promise.all([
+      const [b, t, auth] = await Promise.all([
         getPrepaidBalanceLamports(connection, activePubkey, PROGRAM_ID),
         getTreasuryLamports(connection, PROGRAM_ID),
+        getTreasuryAuthority(connection, PROGRAM_ID),
       ]);
       setPrepaidBalanceLamports(b);
       setTreasuryLamports(t);
+      setTreasuryAuthority(auth);
     } catch (err) {
       console.warn('refreshBalances failed:', err);
     }
@@ -191,6 +204,53 @@ export function useFortuneCookie(): FortuneCookieHook {
         throw err;
       } finally {
         setIsWithdrawing(false);
+      }
+    },
+    [connection, signerWallet, refreshBalances],
+  );
+
+  const collectTreasury = useCallback(
+    async (amountLamports: number, recipient: PublicKey) => {
+      if (!signerWallet) throw new Error('Wallet not connected');
+      setIsCollectingTreasury(true);
+      setError(null);
+      try {
+        await prepaidCollectTreasury(
+          connection,
+          signerWallet,
+          PROGRAM_ID,
+          amountLamports,
+          recipient,
+        );
+        await refreshBalances();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Collect failed';
+        setError(msg);
+        throw err;
+      } finally {
+        setIsCollectingTreasury(false);
+      }
+    },
+    [connection, signerWallet, refreshBalances],
+  );
+
+  const closeCookie = useCallback(
+    async (counter: bigint) => {
+      if (!signerWallet) throw new Error('Wallet not connected');
+      setError(null);
+      try {
+        const sig = await prepaidCloseCookie(
+          connection,
+          signerWallet,
+          PROGRAM_ID,
+          counter,
+        );
+        await refreshBalances();
+        return sig;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Close cookie failed';
+        setError(msg);
+        throw err;
       }
     },
     [connection, signerWallet, refreshBalances],
@@ -409,10 +469,16 @@ export function useFortuneCookie(): FortuneCookieHook {
     prepaidBalanceLamports,
     prepaidRemainingOpens: estimateRemainingOpens(prepaidBalanceLamports),
     treasuryLamports,
+    treasuryAuthority,
+    isTreasuryAuthority:
+      !!activePubkey && !!treasuryAuthority && activePubkey.equals(treasuryAuthority),
     isDepositing,
     isWithdrawing,
+    isCollectingTreasury,
     deposit,
     withdraw,
+    collectTreasury,
+    closeCookie,
     refreshBalances,
     feeLamports: FEE_LAMPORTS,
     costPerOpenLamports: COST_PER_OPEN_ESTIMATE,

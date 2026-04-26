@@ -56,10 +56,14 @@ export default function HomePage() {
     prepaidBalanceLamports,
     prepaidRemainingOpens,
     treasuryLamports,
+    treasuryAuthority,
+    isTreasuryAuthority,
     isDepositing,
     isWithdrawing,
+    isCollectingTreasury,
     deposit,
     withdraw,
+    collectTreasury,
     feeLamports,
   } = useFortuneCookie();
   const [isDemoMode, setIsDemoMode] = useState(mode === 'demo');
@@ -202,12 +206,33 @@ export default function HomePage() {
 
   const handleWithdrawAll = useCallback(async () => {
     setSessionError(null);
+    if (prepaidBalanceLamports <= 0) return;
     try {
+      // Withdraw the full balance — system_program GC-collects the empty PDA.
+      // The tx base fee (~5000 lamports) is paid from the user's main wallet,
+      // not from the balance PDA.
       await withdraw(prepaidBalanceLamports);
     } catch (err: any) {
       setSessionError(err?.message || 'Withdraw failed');
     }
   }, [withdraw, prepaidBalanceLamports]);
+
+  const handleCollectTreasuryAll = useCallback(async () => {
+    setSessionError(null);
+    if (!publicKey && !localWallet) return;
+    const recipient = publicKey ?? localWallet!.publicKey;
+    const rentMin = 890_880;
+    const collectable = treasuryLamports - rentMin;
+    if (collectable <= 0) {
+      setSessionError('Treasury has no withdrawable balance above rent-exempt');
+      return;
+    }
+    try {
+      await collectTreasury(collectable, recipient);
+    } catch (err: any) {
+      setSessionError(err?.message || 'Collect failed');
+    }
+  }, [collectTreasury, publicKey, localWallet, treasuryLamports]);
 
   const formatExpiry = (seconds: number): string => {
     if (seconds <= 0) return 'expired';
@@ -407,8 +432,22 @@ export default function HomePage() {
               {(treasuryLamports / 1_000_000_000).toFixed(4)} SOL
             </div>
             <div style={{ opacity: 0.75, fontSize: '10px' }}>
-              = {Math.floor(treasuryLamports / feeLamports)} opens collected
+              = {Math.floor(Math.max(0, treasuryLamports - 890_880) / feeLamports)} opens collected
             </div>
+            {isTreasuryAuthority && treasuryLamports > 890_880 && (
+              <button
+                onClick={handleCollectTreasuryAll}
+                disabled={isCollectingTreasury}
+                style={{ marginTop: '6px', background: '#fbbf24', color: '#1f2937', fontWeight: 900, border: 'none', padding: '4px 10px', borderRadius: '6px', cursor: isCollectingTreasury ? 'wait' : 'pointer', fontSize: '10px' }}
+              >
+                {isCollectingTreasury ? '⏳' : '💰 Collect to me'}
+              </button>
+            )}
+            {treasuryAuthority && !isTreasuryAuthority && (
+              <div style={{ opacity: 0.5, fontSize: '9px', marginTop: '2px', fontFamily: 'monospace' }}>
+                authority: {treasuryAuthority.toBase58().slice(0, 6)}…
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -445,6 +484,11 @@ export default function HomePage() {
               <div style={{ opacity: 0.85, marginTop: '4px' }}>
                 Re-authorize to resume silent signing.
               </div>
+              {prepaidBalanceLamports > 0 && (
+                <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.4)', borderRadius: '6px', fontSize: '11px', color: '#fde68a' }}>
+                  💰 You still have {(prepaidBalanceLamports / 1_000_000_000).toFixed(4)} SOL in your prepaid balance — re-authorize to keep using it, or click ↓ all on the Prepaid panel to withdraw.
+                </div>
+              )}
               <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
                 <button
                   onClick={handleAuthorizeSessionKey}
