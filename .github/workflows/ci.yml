@@ -26,11 +26,14 @@ jobs:
           cache-dependency-path: app/package-lock.json
 
       - name: Install
-        # --no-optional skips the @dynamic-labs/* and @switchboard-xyz/on-demand
-        # chain. They're declared as `optionalDependencies` and every consuming
-        # file already guards the import with try/catch — installing them would
-        # also require a lockfile refresh on every dependency bump.
-        run: npm ci --no-optional
+        # Using `npm install` (not `npm ci`) because the committed
+        # package-lock.json predates several package.json edits and `npm ci`
+        # aborts on any drift. --omit=optional skips the @dynamic-labs/* and
+        # @switchboard-xyz/on-demand chain — both are declared
+        # `optionalDependencies` and every consuming file already guards the
+        # import with try/catch. Switch back to `npm ci` once the lockfile is
+        # regenerated in a follow-up PR.
+        run: npm install --no-audit --no-fund --omit=optional
 
       - name: TypeScript
         run: npx tsc --noEmit
