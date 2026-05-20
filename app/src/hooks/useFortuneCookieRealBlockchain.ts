@@ -31,6 +31,10 @@ export interface FortuneCookieHook {
   sessionBalance: number;
   needsFunding: boolean;
   fundSession: () => Promise<void>;
+  /** Set when the most recent recordFortune call is finalized on-chain. */
+  lastConfirmedSig: string | null;
+  /** Set when the most recent recordFortune call fails to confirm. */
+  lastConfirmError: string | null;
 }
 
 export function useFortuneCookie(): FortuneCookieHook {
@@ -38,14 +42,22 @@ export function useFortuneCookie(): FortuneCookieHook {
   const { publicKey, signTransaction, connected } = useWallet();
   const { mode, localWallet } = useWalletMode();
 
-  const [isLoading,      setIsLoading]      = useState(false);
-  const [error,          setError]          = useState<string | null>(null);
-  const [sessionBalance, setSessionBalance] = useState(0);
-  const [sessionKeypair, setSessionKeypair] = useState<Keypair | null>(null);
+  const [isLoading,         setIsLoading]         = useState(false);
+  const [error,             setError]             = useState<string | null>(null);
+  const [sessionBalance,    setSessionBalance]    = useState(0);
+  const [sessionKeypair,    setSessionKeypair]    = useState<Keypair | null>(null);
+  const [lastConfirmedSig,  setLastConfirmedSig]  = useState<string | null>(null);
+  const [lastConfirmError,  setLastConfirmError]  = useState<string | null>(null);
 
   const blockhashCacheRef      = useRef<BlockhashCache | null>(null);
   const shardsInitializedRef   = useRef<Set<number>>(new Set());
   const airdropAttemptedRef    = useRef(false);
+  // Strictly monotonic counter for the cookie PDA seed. Date.now() granularity (ms)
+  // is not enough on its own — two taps within the same ms would derive the same
+  // PDA and the second init would fail with "account already in use", forcing
+  // serial-only opens. Tracking the last value and bumping by 1 on a tie keeps
+  // every tap unique without losing rough wall-clock ordering.
+  const lastCounterRef         = useRef<number>(0);
 
   useEffect(() => {
     setSessionKeypair(getOrCreateSessionKeypair());
@@ -147,22 +159,36 @@ export function useFortuneCookie(): FortuneCookieHook {
       if (shardsInitializedRef.current.has(shardId)) return { shardId, pda };
 
       const info = await connection.getAccountInfo(pda);
-      if (!info) {
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const tx: Transaction = await (program.methods as any)
-            .initializeStatsShard(shardId)
-            .accounts({ payer: userPubkey, shard: pda, systemProgram: SystemProgram.programId })
-            .transaction();
-          const signed = await signTx(tx);
-          // Fire-and-forget: don't block the open_cookie TX on shard init landing
-          connection.sendRawTransaction(signed.serialize(), { skipPreflight: true }).catch(() => {});
-          // Still wait one slot so the shard is likely available for open_cookie
-          await new Promise(r => setTimeout(r, 500));
-        } catch {}
+      if (info) {
+        shardsInitializedRef.current.add(shardId);
+        return { shardId, pda };
       }
-      shardsInitializedRef.current.add(shardId);
-      return { shardId, pda };
+
+      // Shard missing — initialize it. We must verify the account exists before
+      // marking the cache; otherwise a failed init poisons it and every later
+      // open_cookie call fails with AccountNotInitialized.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tx: Transaction = await (program.methods as any)
+        .initializeStatsShard(shardId)
+        .accounts({ payer: userPubkey, shard: pda, systemProgram: SystemProgram.programId })
+        .transaction();
+      const signed = await signTx(tx);
+      try {
+        await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
+      } catch {
+        // Another tab/session may have raced us. The recheck below decides.
+      }
+
+      // Poll for the shard account up to ~3s before giving up.
+      for (let i = 0; i < 6; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        const recheck = await connection.getAccountInfo(pda);
+        if (recheck) {
+          shardsInitializedRef.current.add(shardId);
+          return { shardId, pda };
+        }
+      }
+      throw new Error(`Stats shard ${shardId} init did not land — try again`);
     },
     [connection],
   );
@@ -251,7 +277,10 @@ export function useFortuneCookie(): FortuneCookieHook {
         );
 
         // ── PDAs ────────────────────────────────────────────────────────────
-        const counterSeed = Math.floor(Date.now() / 1000);
+        const candidate = Date.now();
+        const counterSeed =
+          candidate > lastCounterRef.current ? candidate : lastCounterRef.current + 1;
+        lastCounterRef.current = counterSeed;
         const [cookiePda] = PublicKey.findProgramAddressSync(
           [
             authorityPubkey.toBuffer(),
@@ -289,11 +318,25 @@ export function useFortuneCookie(): FortuneCookieHook {
 
         console.log(`⚡ [${signerMode}] TX:`, txSig);
 
+        // Clear any previous confirmation state — this signature supersedes it.
+        setLastConfirmedSig(null);
+        setLastConfirmError(null);
         connection
           .confirmTransaction({ blockhash, lastValidBlockHeight, signature: txSig }, 'processed')
           .then(res => {
-            if (res.value.err) console.warn('TX error:', res.value.err);
-            else console.log('✅ Confirmed:', txSig);
+            if (res.value.err) {
+              const msg = `On-chain error: ${JSON.stringify(res.value.err)}`;
+              console.warn(msg);
+              setLastConfirmError(msg);
+            } else {
+              console.log('✅ Confirmed:', txSig);
+              setLastConfirmedSig(txSig);
+            }
+          })
+          .catch(err => {
+            const msg = err?.message || 'Confirmation timed out';
+            console.warn('TX confirm failed:', msg);
+            setLastConfirmError(msg);
           });
 
         if (signerMode === 'session' && sessionKeypair) {
@@ -327,5 +370,7 @@ export function useFortuneCookie(): FortuneCookieHook {
     sessionBalance,
     needsFunding,
     fundSession,
+    lastConfirmedSig,
+    lastConfirmError,
   };
 }

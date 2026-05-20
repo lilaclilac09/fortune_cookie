@@ -50,7 +50,7 @@ interface TxRecord {
 export default function HomePage() {
   const { publicKey, connected, disconnect } = useWallet();
   const { mode, setMode, localWallet } = useWalletMode();
-  const { recordFortune, sessionBalance, needsFunding, fundSession, sessionPubkey } = useFortuneCookie();
+  const { recordFortune, sessionBalance, needsFunding, fundSession, sessionPubkey, lastConfirmedSig, lastConfirmError } = useFortuneCookie();
   const [isDemoMode, setIsDemoMode] = useState(mode === 'demo');
   const [isLocalMode, setIsLocalMode] = useState(mode === 'local');
 
@@ -328,23 +328,35 @@ export default function HomePage() {
                         </div>
                       </div>
                     )}
-                    {txSignature && !isRecording && (
-                      <div style={{ background: '#dcfce7', border: '2px solid #22c55e', borderRadius: '10px', padding: '12px 16px' }}>
-                        <p style={{ color: '#15803d', fontWeight: 900, fontSize: '13px', margin: '0 0 6px 0' }}>✓ On-chain confirmed!</p>
-                        {txSignature.startsWith('demo_') ? (
-                          <span style={{ color: '#6b7280', fontSize: '10px', fontFamily: 'monospace' }}>{txSignature}</span>
-                        ) : (
-                          <a
-                            href={`https://solscan.io/tx/${txSignature}?cluster=devnet`}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ display: 'block', color: '#166534', fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all', textDecoration: 'underline' }}
-                          >
-                            {txSignature.slice(0, 24)}...{txSignature.slice(-12)} ↗
-                          </a>
-                        )}
-                      </div>
-                    )}
+                    {txSignature && !isRecording && (() => {
+                      const isDemo = txSignature.startsWith('demo_');
+                      const confirmed = isDemo || lastConfirmedSig === txSignature;
+                      const confirmFailed = !isDemo && lastConfirmError !== null && lastConfirmedSig !== txSignature;
+                      const bg = confirmFailed ? '#fef2f2' : confirmed ? '#dcfce7' : '#fefce8';
+                      const border = confirmFailed ? '#ef4444' : confirmed ? '#22c55e' : '#fde68a';
+                      const fg = confirmFailed ? '#7f1d1d' : confirmed ? '#15803d' : '#92400e';
+                      const label = confirmFailed ? '✗ Submitted but not confirmed' : confirmed ? '✓ On-chain confirmed!' : '⚡ Submitted — confirming…';
+                      return (
+                        <div style={{ background: bg, border: `2px solid ${border}`, borderRadius: '10px', padding: '12px 16px' }}>
+                          <p style={{ color: fg, fontWeight: 900, fontSize: '13px', margin: '0 0 6px 0' }}>{label}</p>
+                          {isDemo ? (
+                            <span style={{ color: '#6b7280', fontSize: '10px', fontFamily: 'monospace' }}>{txSignature}</span>
+                          ) : (
+                            <a
+                              href={`https://solscan.io/tx/${txSignature}?cluster=devnet`}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ display: 'block', color: fg, fontFamily: 'monospace', fontSize: '10px', wordBreak: 'break-all', textDecoration: 'underline' }}
+                            >
+                              {txSignature.slice(0, 24)}...{txSignature.slice(-12)} ↗
+                            </a>
+                          )}
+                          {confirmFailed && lastConfirmError && (
+                            <p style={{ color: '#991b1b', fontSize: '10px', margin: '6px 0 0 0', wordBreak: 'break-all' }}>{lastConfirmError}</p>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {txError && (
                       <div style={{ background: '#fee2e2', border: '2px solid #ef4444', borderRadius: '10px', padding: '12px 16px' }}>
                         <p style={{ color: '#7f1d1d', fontWeight: 900, fontSize: '13px', margin: '0 0 4px 0' }}>✗ TX Failed</p>
