@@ -96,6 +96,18 @@ export default function HomePage() {
   const [isRecording, setIsRecording] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
 
+  // Reset the open-cookie UI whenever the user switches modes. Without this,
+  // a fortune cracked in demo mode would still be shown after picking Local
+  // Wallet or Select Wallet — sig + paper from the previous mode bleed
+  // through and look like real on-chain state for the new wallet.
+  useEffect(() => {
+    setCookieState('intact');
+    setCurrentFortune(null);
+    setTxSignature(null);
+    setTxError(null);
+    setIsRecording(false);
+  }, [isDemoMode, isLocalMode, connected]);
+
   const breakCookie = useCallback(() => {
     if (cookieState !== 'intact') return;
 
