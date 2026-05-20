@@ -96,6 +96,9 @@ export function useVrfFortune(): VrfFortuneHook {
   const prefetchedRng     = useRef<PrefetchedRng | null>(null);
   const prefetchInFlight  = useRef(false);
   const airdropDone       = useRef(false);
+  // See useFortuneCookieRealBlockchain: needed so back-to-back taps don't collide
+  // on the cookie PDA (counter is a u64 seed).
+  const lastCounterRef    = useRef<number>(0);
 
   // ── Init: load Switchboard SDK + fund session ───────────────────────────────
   useEffect(() => {
@@ -202,7 +205,10 @@ export function useVrfFortune(): VrfFortuneHook {
         const program = new anchor.Program(IDL as any, provider);
 
         const { shardId, pda: statsShard } = getStatsShard(authorityPubkey);
-        const counterSeed = Math.floor(Date.now() / 1000);
+        const candidate = Date.now();
+        const counterSeed =
+          candidate > lastCounterRef.current ? candidate : lastCounterRef.current + 1;
+        lastCounterRef.current = counterSeed;
         const [cookiePda] = PublicKey.findProgramAddressSync(
           [
             authorityPubkey.toBuffer(),
