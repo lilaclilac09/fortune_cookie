@@ -30,6 +30,17 @@ export default function Providers({
     }
   }
 
+  // @solana/web3.js auto-derives the WebSocket endpoint by replacing http→ws on
+  // `endpoint`. When `endpoint` is our same-origin /api/rpc proxy (which only
+  // speaks HTTP), the derived ws://localhost:PORT/api/rpc has no listener and
+  // confirmTransaction's subscription hangs forever — UI stays on
+  // "⚡ Submitted — confirming…" even after the tx finalizes on-chain.
+  // Point WebSockets straight at the upstream RPC instead. HTTP traffic still
+  // flows through the proxy so the raw-bytes-forwarding (u64::MAX safety) is
+  // preserved.
+  const wsEndpoint =
+    process.env.NEXT_PUBLIC_SOLANA_WS ?? "wss://api.devnet.solana.com";
+
   const wallets = useMemo(
     () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
     []
@@ -37,7 +48,7 @@ export default function Providers({
 
   return (
     <DynamicWalletProvider>
-      <ConnectionProvider endpoint={endpoint}>
+      <ConnectionProvider endpoint={endpoint} config={{ wsEndpoint }}>
         <WalletProvider wallets={wallets} autoConnect={false}>
           <WalletModalProvider>
             <WalletModeProvider>
