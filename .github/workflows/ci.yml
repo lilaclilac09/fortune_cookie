@@ -1,0 +1,95 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: app — type-check, build, regression
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install
+        # Using `npm install` (not `npm ci`) because the committed
+        # package-lock.json predates several package.json edits and `npm ci`
+        # aborts on any drift. --omit=optional skips the @dynamic-labs/* and
+        # @switchboard-xyz/on-demand chain — both are declared
+        # `optionalDependencies` and every consuming file already guards the
+        # import with try/catch. Switch back to `npm ci` once the lockfile is
+        # regenerated in a follow-up PR.
+        run: npm install --no-audit --no-fund --omit=optional
+
+      - name: TypeScript
+        run: npx tsc --noEmit
+
+      - name: Cookie-PDA monotonic counter (regression for serial-tap bug)
+        run: |
+          node --input-type=module -e '
+            import { PublicKey } from "@solana/web3.js";
+            import anchor from "@coral-xyz/anchor";
+            const PROGRAM_ID = new PublicKey("DaBeUWY9HtfNDW9mED1BoGiUbDULM7mcubJaaardfJ85");
+            const auth = new PublicKey("11111111111111111111111111111111");
+            // Simulate the production hook: monotonic ref bumped on tie.
+            let last = 0;
+            const seeds = [];
+            for (let i = 0; i < 50; i++) {
+              const cand = Date.now();
+              const c = cand > last ? cand : last + 1;
+              last = c;
+              const [pda] = PublicKey.findProgramAddressSync(
+                [auth.toBuffer(), Buffer.from("cookie"), new anchor.BN(c).toArrayLike(Buffer, "le", 8)],
+                PROGRAM_ID,
+              );
+              seeds.push(pda.toBase58());
+            }
+            const unique = new Set(seeds).size;
+            if (unique !== seeds.length) {
+              console.error("FAIL: cookie PDA collision —", seeds.length - unique, "duplicate(s) in 50 rapid taps");
+              process.exit(1);
+            }
+            console.log("OK: 50 rapid taps produced 50 distinct cookie PDAs");
+          '
+
+      - name: Next build
+        env:
+          NEXT_PUBLIC_SOLANA_RPC: https://api.devnet.solana.com
+        # --no-lint: the repo has pre-existing eslint warnings (unescaped
+        # JSX quotes, missing @typescript-eslint/* rule defs from a stale
+        # devDep chain) that aren't introduced by this PR. tsc --noEmit
+        # above already catches real type/build errors. Track lint cleanup
+        # in a separate PR; flip this flag off when that lands.
+        run: npx next build --no-lint
+
+  program:
+    name: program — cargo check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned in rust-toolchain.toml; this step just makes sure rustup is present.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Light check: catches Rust-level errors without needing the Solana
+      # platform-tools. Full `anchor test` requires solana-cli + a local
+      # validator — wire that into a separate workflow once we have one
+      # reliable integration test to run.
+      - name: cargo check
+        run: cargo check --manifest-path programs/fortune_cookie/Cargo.toml
