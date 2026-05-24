@@ -6,3 +6,10 @@ node_modules
 test-ledger
 .yarn
 .gstack/
+**/.next/
+**/.next
+*.save
+*.backup
+*.ref
+*.tomly
+.claude/worktrees/
