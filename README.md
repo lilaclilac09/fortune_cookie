@@ -1,5 +1,7 @@
 # Zen Fortune Cookie
 
+**Status: BLOCKED** — restore the public frontend deployment to verify the site online; the local demo does not record on-chain.
+
 A Solana dApp where you tap a cookie and mint an on-chain fortune. Each
 open writes a `FortuneCookie` PDA, bumps a sharded `StatsShard` counter,
 and emits a `CookieOpened` event for off-chain aggregation.
