@@ -29,8 +29,9 @@ async function enterDemoMode(page: Page) {
 
 async function breakCookie(page: Page) {
   // The giant cookie emoji is the clickable target
-  const cookie = page.locator("text=🥠").first();
+  const cookie = page.getByText("🥠", { exact: true });
   await expect(cookie).toBeVisible({ timeout: 5000 });
+  await expect(cookie.locator("..")).toHaveCSS("cursor", "pointer");
   await cookie.click();
   // Wait for fortune paper to appear
   await expect(page.locator("text=Your Fortune")).toBeVisible({ timeout: 5000 });
@@ -93,7 +94,8 @@ test.describe("Demo Mode — core gameplay", () => {
 
   test("demo mode shows demo tx signature (not solscan link)", async ({ page }) => {
     await breakCookie(page);
-    await expect(page.locator("text=On-chain confirmed!")).toBeVisible({ timeout: 3000 });
+    await expect(page.getByText("Demo result — not recorded on-chain")).toBeVisible({ timeout: 3000 });
+    await expect(page.getByText("On-chain confirmed!")).toHaveCount(0);
     // Demo tx starts with "demo_tx_"
     const sig = page.locator("text=/demo_tx_/");
     await expect(sig).toBeVisible();
@@ -137,9 +139,8 @@ test.describe("Demo Mode — core gameplay", () => {
 
   test("cannot break cookie while cracking animation plays", async ({ page }) => {
     // Click quickly twice — second click should be ignored
-    const cookie = page.locator("text=🥠").first();
-    await cookie.click();
-    await cookie.click(); // should be no-op (state !== 'intact')
+    const cookie = page.getByText("🥠", { exact: true });
+    await cookie.dblclick(); // The second click happens during the cracking animation.
     // Only one fortune paper should appear
     const papers = page.locator("text=Your Fortune");
     await expect(papers).toHaveCount(1, { timeout: 3000 });

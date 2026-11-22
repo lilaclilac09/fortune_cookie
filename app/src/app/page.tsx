@@ -347,7 +347,7 @@ export default function HomePage() {
                       const bg = confirmFailed ? '#fef2f2' : confirmed ? '#dcfce7' : '#fefce8';
                       const border = confirmFailed ? '#ef4444' : confirmed ? '#22c55e' : '#fde68a';
                       const fg = confirmFailed ? '#7f1d1d' : confirmed ? '#15803d' : '#92400e';
-                      const label = confirmFailed ? '✗ Submitted but not confirmed' : confirmed ? '✓ On-chain confirmed!' : '⚡ Submitted — confirming…';
+                      const label = isDemo ? 'Demo result — not recorded on-chain' : confirmFailed ? '✗ Submitted but not confirmed' : confirmed ? '✓ On-chain confirmed!' : '⚡ Submitted — confirming…';
                       return (
                         <div style={{ background: bg, border: `2px solid ${border}`, borderRadius: '10px', padding: '12px 16px' }}>
                           <p style={{ color: fg, fontWeight: 900, fontSize: '13px', margin: '0 0 6px 0' }}>{label}</p>
