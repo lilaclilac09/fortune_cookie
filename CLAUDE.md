@@ -1,3 +1,5 @@
+Every agent here accepts work only against [ACCEPTANCE.md](ACCEPTANCE.md) (Aileen's standard). Every task and PR ends with its evidence closer.
+
 # CLAUDE.md — Zen Fortune Cookie
 
 ## What this project is
